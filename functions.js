@@ -2,18 +2,29 @@
 import { DBFFile } from 'dbffile';
 import axios from 'axios';
 
-
 export async function readDBF(dbfFilePath) {
     try {
-        let dbf = await DBFFile.open(dbfFilePath);
-        let data = [];
+        const dbf = await DBFFile.open(dbfFilePath);
+            
+        const fields = dbf.fields.map(field => ({
+            name: field.name,
+            type: field.type,
+            size: field.size,
+            decs: field.decimals
+        }));
+
+        const data = [];
         for await (const record of dbf) {
-            data.push(record);  // Push each record to the array
+            data.push(record);
         }
-        return data;  // Return the records as an array
+
+        return {
+            structure: fields,
+            rows: data
+        };
     } catch (error) {
         console.error('Error reading DBF file:', error);
-        throw error;  // Rethrow the error to be handled elsewhere
+        throw error;
     }
 }
 

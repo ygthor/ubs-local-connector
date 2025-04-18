@@ -4,9 +4,9 @@ dotenv.config();
 
 
 async function main() {
-    // testServerResponse();
-    syncAll();
-    // singleSync()
+    testServerResponse();
+    // syncAll();
+    singleSync()
 
 }
 
@@ -17,31 +17,31 @@ async function syncAll(){
     ];
     let dbf_arr = [
         // Customer
-        'arcust',
-        'icarea',
+        'arcust', // GOT, GOT
+        'icarea', // GOT, GOTubsstk2015
 
         // Supplier
-        'apvend',
-        'icarea',
+        'apvend', // GOT. GOT
+        // 'icarea', // GOT
         
         // Item
-        'Icitem',
+        'icitem',
 
         // Transaction
-        'ictran',
-        'artran',
+        'ictran', // GOT
+        'artran',// GOT
 
         // Payment
-        'arpay',
-        'arpost',
-        'gldata',
-        'glbatch',
-        'glpost',
+        'arpay', // GOT
+        'arpost', // GOT
+        'gldata', // GOT
+        'glbatch', // GOT
+        'glpost', // GOT
     ];
 
     for(let i = 0; i < directory_arr.length; i++) {
         let directory_name = directory_arr[i];
-        let directory_path = 'C:/' + directory_name + '/DATA/';
+        let directory_path = 'C:/' + directory_name + '/Sample';
         for(let j = 0; j < dbf_arr.length; j++) {
             let file_name = dbf_arr[j] + '.dbf';
             try {
@@ -62,13 +62,15 @@ async function syncAll(){
 
 // for Test purpose
 async function singleSync() {  
-    let directory_name = 'UBSACC2015';
-    let directory_path = 'C:/' + directory_name + '/DATA/';
-    let file_name = 'userpin.dbf';
+    let directory_name = 'UBSSTK2015';
+    // let directory_name = 'UBSACC2015';
+    let directory_path = 'C:/' + directory_name + '/DATA/TESTMODE';
+    let file_name = 'icitem.dbf';
     var data = await readDBF(directory_path + '/' + file_name);
+    console.log(data)
     syncToServer({
         directory: directory_name,
-        filename: 'userpin.dbf',
+        filename: file_name,
         data: data
     });
 }
