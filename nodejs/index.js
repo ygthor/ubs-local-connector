@@ -62,17 +62,17 @@ async function syncAll(){
 
 // for Test purpose
 async function singleSync() {  
-    let directory_name = 'UBSSTK2015';
-    // let directory_name = 'UBSACC2015';
-    let directory_path = 'C:/' + directory_name + '/DATA/TESTMODE';
-    let file_name = 'icitem.dbf';
+    // let directory_name = 'UBSSTK2015';
+    let directory_name = 'UBSACC2015';
+    let directory_path = 'C:/' + directory_name + '/Sample';
+    let file_name = 'arcust.dbf';
     var data = await readDBF(directory_path + '/' + file_name);
     console.log(data)
-    syncToServer({
-        directory: directory_name,
-        filename: file_name,
-        data: data
-    });
+    // syncToServer({
+    //     directory: directory_name,
+    //     filename: file_name,
+    //     data: data
+    // });
 }
 
 
