@@ -1,0 +1,3 @@
+dbfread
+requests
+python-dotenv
