@@ -1,20 +1,24 @@
 from utils import read_dbf, sync_to_server, test_server_response
+from sync_database import sync_to_database
 import os
 
 def main():
     test_server_response()
-    # sync_all()
-    single_sync()
+    sync_all()
+    # single_sync()
 
 def sync_all():
     directory_arr = ['UBSACC2015', 'UBSSTK2015']
     dbf_arr = [
         'arcust',
-        'icarea',
         'apvend',
+        'artran',
+
+        'icarea'
         'icitem',
         'ictran',
-        'artran',
+        
+
         'arpay',
         'arpost',
         'gldata',
@@ -29,7 +33,7 @@ def sync_all():
             full_path = os.path.join(directory_path, file_name)
             try:
                 data = read_dbf(full_path)
-                sync_to_server(file_name, data, directory_name)
+                sync_to_database(file_name, data, directory_name)
             except Exception as e:
                 print(f"Error processing {file_name}:", e)
 
@@ -41,7 +45,7 @@ def single_sync():
     full_path = os.path.join(directory_path, file_name)
     data = read_dbf(full_path)
     print(data)
-    sync_to_server(file_name, data, directory_name)
+    sync_to_database(file_name, data, directory_name)
 
 
 if __name__ == "__main__":
