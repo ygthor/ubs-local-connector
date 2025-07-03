@@ -67,6 +67,7 @@ class SyncManager {
             }
 
             // Send to remote API
+            console.log(mapping.endpoint)
             const results = await this.apiSync.postBatch(mapping.endpoint, transformedRecords);
             
             // Count successes
