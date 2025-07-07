@@ -2,10 +2,57 @@
 
 class Converter
 {
-    function map($entity)
+    static function ubsTable(){
+        $dbf_arr = [
+            'ubs_ubsacc2015_arcust',
+            // 'ubs_ubsacc2015_apvend',
+            // 'ubs_ubsacc2015_arpay',
+            // 'ubs_ubsacc2015_arpost',
+            // 'ubs_ubsacc2015_artran',
+            // 'ubs_ubsacc2015_gldata',
+            // 'ubs_ubsacc2015_glbatch',
+            // 'ubs_ubsacc2015_glpost',
+            // 'ubs_ubsacc2015_ictran',
+
+
+            // 'ubs_ubsstk2015_arcust',
+            // 'ubs_ubsstk2015_apvend',
+            // 'ubs_ubsstk2015_icarea',
+            // 'ubs_ubsstk2015_icitem',
+            // 'ubs_ubsstk2015_ictran',
+        ];
+        return $dbf_arr;
+    }
+
+
+    static function primaryKey($entity){
+        $maps = [
+            'ubs_ubsacc2015_arcust' => 'CUSTNO',
+            'customers' => 'customer_code',
+        ];
+
+        return $maps[$entity] ?? null;
+    }
+    static function columnMap($entity){
+        $common = [
+            'UPDATED_ON' => 'updated_at',
+            'customers' => 'customer_code',
+        ];
+
+        return $maps[$entity] ?? null;
+    }
+    static function table_map($entity){
+         $maps = [
+            'ubs_ubsacc2015_arcust' => 'customers',
+        ];
+
+        return $maps[$entity] ?? null;
+    }
+
+    static function mapColumns($entity)
     {
         $maps = [
-            'customer' => [
+            'customers' => [
                 // remote => ubs
                 'customer_code'   => 'CUSTNO',
                 'name'            => 'NAME',
@@ -33,6 +80,24 @@ class Converter
                 'created_at'      => 'CREATED_ON',
                 'updated_at'      => 'UPDATED_ON',
             ],
+
+
+
+            /*
+                $dbf_arr = [
+                    'ubs_ubsacc2015_arcust',
+                    'apvend',
+                    'artran',
+                    'icarea',
+                    'icitem',
+                    'ictran',
+                    'arpay',
+                    'arpost',
+                    'gldata',
+                    'glbatch',
+                    'glpost',
+                ];
+            */
             // Add more: 'product' => [...], 'invoice' => [...]
         ];
 

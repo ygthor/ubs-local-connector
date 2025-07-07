@@ -56,7 +56,7 @@ if (!function_exists('dd')) {
                 print_r($v);
             } elseif (is_object($v)) {
                 // Convert boolean properties to strings in the object
-                $v = convertBooleansToStrings(get_object_vars($v));
+                // $v = convertBooleansToStrings(get_object_vars($v));
                 
                 // JSON encode the object
                 $v = json_encode($v, JSON_PRETTY_PRINT);
