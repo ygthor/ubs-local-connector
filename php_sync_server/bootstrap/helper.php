@@ -78,15 +78,3 @@ function timestamp(){
     return date('Y-m-d H:i:s');
 }
 
-
-function insertSyncLog(){
-    $db = new mysql();
-    $db->insert('sync_logs',[
-        'synced_at' => timestamp(),
-    ]);
-}
-function lastSyncAt(){
-    $db = new mysql();
-    $data = $db->first('SELECT * FROM sync_logs ORDER BY synced_at DESC LIMIT 1');
-    return $data ? $data['synced_at'] : null;
-}
