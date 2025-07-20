@@ -46,6 +46,10 @@ def sync_to_mysql(table_name, structures, rows):
     )
     
     cursor = connection.cursor()
+
+     # Truncate table to remove old data
+    truncate_sql = f"TRUNCATE TABLE `{table_name}`"
+    cursor.execute(truncate_sql)
     
     try:
         # Create table if not exists

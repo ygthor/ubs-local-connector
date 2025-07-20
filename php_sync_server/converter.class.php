@@ -2,12 +2,13 @@
 
 class Converter
 {
-    static function ubsTable(){
+    static function ubsTable()
+    {
         $dbf_arr = [
             'ubs_ubsacc2015_arcust',
             // 'ubs_ubsacc2015_apvend',
-            // 'ubs_ubsacc2015_arpay',
-            // 'ubs_ubsacc2015_arpost',
+            // 'ubs_ubsacc2015_arpay',// => receipt
+            // 'ubs_ubsacc2015_arpost',// => order
             // 'ubs_ubsacc2015_artran',
             // 'ubs_ubsacc2015_gldata',
             // 'ubs_ubsacc2015_glbatch',
@@ -20,20 +21,38 @@ class Converter
             // 'ubs_ubsstk2015_icarea',
             // 'ubs_ubsstk2015_icitem',
             // 'ubs_ubsstk2015_ictran',
+
+            'ubs_ubsstk2015_arpso', // order
+            'ubs_ubsstk2015_icpso', // order item
+            'ubs_ubsstk2015_artran', // invoice
+            'ubs_ubsstk2015_ictran', // invoice item
         ];
         return $dbf_arr;
     }
 
 
-    static function primaryKey($entity){
+    static function primaryKey($entity)
+    {
         $maps = [
             'ubs_ubsacc2015_arcust' => 'CUSTNO',
+            'ubs_ubsacc2015_arpay' => 'CUSTNO',
+            'ubs_ubsacc2015_arpost' => 'ENTRY',
+
+
+            'ubs_ubsacc2015_arpost' => 'REFNO',
+            'ubs_ubsstk2015_icpso' => [
+                'REFNO',
+                'ITEMCOUNT'
+            ],
+
+
             'customers' => 'customer_code',
         ];
 
         return $maps[$entity] ?? null;
     }
-    static function columnMap($entity){
+    static function columnMap($entity)
+    {
         $common = [
             'UPDATED_ON' => 'updated_at',
             'customers' => 'customer_code',
@@ -41,9 +60,12 @@ class Converter
 
         return $maps[$entity] ?? null;
     }
-    static function table_map($entity){
-         $maps = [
+    static function table_map($entity)
+    {
+        $maps = [
             'ubs_ubsacc2015_arcust' => 'customers',
+            'ubs_ubsstk2015_arpso' => 'orders',
+            'ubs_ubsstk2015_icpso' => 'order_items',
         ];
 
         return $maps[$entity] ?? null;
@@ -53,52 +75,62 @@ class Converter
     {
         $maps = [
             'customers' => [
-                // remote => ubs
-                'customer_code'   => 'CUSTNO',
-                'name'            => 'NAME',
-                'company_name'    => 'NAME2',
-                'address1'        => 'ADD1',
-                'address2'        => 'ADD2',
-                'postcode'        => 'POSTCODE',
-                'state'           => 'STATE',
-                'territory'       => 'AREA',
-                'telephone1'      => 'PHONE',
-                'telephone2'      => 'PHONEA',
-                'fax_no'          => 'FAX',
-                'address'         => 'ADD1',
-                'contact_person'  => 'CONTACT',
-                'email'           => 'E_MAIL',
-                'phone'           => 'PHONE',
-                'customer_group'  => 'CT_GROUP',
-                'customer_type'   => 'CUST_TYPE',
-                'segment'         => 'BUSINESS',
-                'payment_type'    => 'TERM',
-                'payment_term'    => 'TERM_IN_M',
-                'max_discount'    => 'PROV_DISC',
-                'lot_type'        => 'TEMP',
-                'avatar_url'      => null,
-                'created_at'      => 'CREATED_ON',
-                'updated_at'      => 'UPDATED_ON',
+                // UBS => REMOTE
+                'CUSTNO'     => 'customer_code',
+                'NAME'       => 'name',
+                'NAME2'      => 'company_name',
+                'ADD1'       => 'address', // overwritten from 'address1'
+                'ADD2'       => 'address2',
+                'POSTCODE'   => 'postcode',
+                'STATE'      => 'state',
+                'AREA'       => 'territory',
+                'PHONE'      => 'phone', // overwritten from 'telephone1'
+                'PHONEA'     => 'telephone2',
+                'FAX'        => 'fax_no',
+                'CONTACT'    => 'contact_person',
+                'E_MAIL'     => 'email',
+                'CT_GROUP'   => 'customer_group',
+                'CUST_TYPE'  => 'customer_type',
+                'BUSINESS'   => 'segment',
+                'TERM'       => 'payment_type',
+                'TERM_IN_M'  => 'payment_term',
+                'PROV_DISC'  => 'max_discount',
+                'TEMP'       => 'lot_type',
+                'CREATED_ON' => 'created_at',
+                'UPDATED_ON' => 'updated_at',
             ],
 
+            'orders' => [
+                'REFNO'       => '', // key was empty
+                'CUSTNO'      => 'customer_code',
+                'DATE'        => 'date',
+                'DESP'        => 'description',
+                'GROSS_BIL'   => 'gross_amount',
+                'TAX1_BIL'    => 'tax1',
+                'TAX2_BIL'    => 'tax2',
+                'TAX3_BIL'    => 'tax3',
+                'TAX1'    => 'tax1',
+                'TAX2'    => 'tax2',
+                'TAX3'    => 'tax3',
+                'TAXP1'       => 'tax1_percentage',
+                'TAXP2'       => 'tax2_percentage',
+                'TAXP3'       => 'tax3_percentage',
+                'TAX'         => 'total_tax',
+                'GRAND_BIL'   => 'grand_amount',
+                'GRAND'   => 'grand_amount',
+                'INVGROSS'    => 'inv_gross',
+                'DISCOUNT'    => 'discount',
+                'NET'         => 'net_amount',
+                'CREATED_ON' => 'created_at',
+                'PLA_DODATE' => 'created_at',
+                'UPDATED_ON' => 'updated_at',
+                'NAME' => 'customer_name'
+            ],
+
+            
 
 
-            /*
-                $dbf_arr = [
-                    'ubs_ubsacc2015_arcust',
-                    'apvend',
-                    'artran',
-                    'icarea',
-                    'icitem',
-                    'ictran',
-                    'arpay',
-                    'arpost',
-                    'gldata',
-                    'glbatch',
-                    'glpost',
-                ];
-            */
-            // Add more: 'product' => [...], 'invoice' => [...]
+
         ];
 
         return $maps[$entity] ?? [];

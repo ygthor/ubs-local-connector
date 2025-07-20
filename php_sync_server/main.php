@@ -43,6 +43,6 @@ foreach($ubsTables as $ubs_table){
 
 
 
-sync_all_dbf_to_local();
+// sync_all_dbf_to_local();
 
 dd('SUCCESS');

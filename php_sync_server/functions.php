@@ -280,17 +280,19 @@ function sync_all_dbf_to_local()
 {
     $directory_arr = ['UBSACC2015', 'UBSSTK2015'];
     $dbf_arr = [
-        'arcust',
-        'apvend',
-        'artran',
-        'icarea',
-        'icitem',
-        'ictran',
-        'arpay',
-        'arpost',
-        'gldata',
-        'glbatch',
-        'glpost',
+        // 'arcust',
+        // 'apvend',
+        // 'artran',
+        // 'icarea',
+        // 'icitem',
+        // 'ictran',
+        // 'arpay',
+        // 'arpost',
+        // 'gldata',
+        // 'glbatch',
+        // 'glpost',
+
+        'arpso',
     ];
 
     $db = new mysql;
@@ -313,6 +315,7 @@ function sync_all_dbf_to_local()
 
                 $data = read_dbf($full_path); // return ['structure'=>[], 'rows'=>[]]
                 $table_name = strtolower("ubs_{$directory_name}_{$dbf_name}");
+                
 
                 // Optional: Clean table before insert
                 $db->query("DELETE FROM {$table_name}");
@@ -322,7 +325,7 @@ function sync_all_dbf_to_local()
                     $db->insert($table_name, $row);
                 }
 
-                echo "Inserted " . count($data['rows']) . " rows into {$table_name}\n";
+                echo "Inserted " . count($data['rows']) . " rows into {$table_name}<br>\n";
             } catch (Exception $e) {
                 echo "Error processing $file_name: " . $e->getMessage() . "\n";
             }

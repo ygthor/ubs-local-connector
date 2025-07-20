@@ -1,10 +1,20 @@
 from utils import read_dbf, sync_to_server, test_server_response
 from sync_database import sync_to_database
 import os
+import time
 
 def main():
-    test_server_response()
-    sync_all()
+    # test_server_response()
+
+    while True:
+        # Call your function or logic here
+        print("Running task...")
+        sync_all()
+        # Wait 5 seconds
+        print("Waiting ... ... ...")
+        time.sleep(30)
+        
+
     # single_sync()
 
 def sync_all():
@@ -24,6 +34,8 @@ def sync_all():
         'gldata',
         'glbatch',
         'glpost',
+        'arpso',
+        'icpso'
     ]
 
     for directory_name in directory_arr:
