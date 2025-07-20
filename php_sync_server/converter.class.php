@@ -135,10 +135,12 @@ class Converter
             ],
 
             'order_items' => [
-                // 'TYPE' => 'MASTER',
-                // 'TRANCODE' => 'MASTER',
-                // 'CUSTNO' => 'MASTER',
-                // 'DATE' => 'MASTER',
+                'TYPE' => 'orders|type',
+                'TRANCODE' => null,
+                'CUSTNO' => 'orders|customer_code',
+                'DATE' => 'orders|order_date',
+                // 'NAME ' => 'orders|customer_name',   
+
                 'REFNO'       => 'reference_no', 
                 'ITEMCOUNT' => 'item_count',
                 'ITEMNO' => 'product_no',
@@ -154,8 +156,7 @@ class Converter
                 'AMT1' => 'amount',
                 'AMT' => 'amount',
                 'QTY1' => 'quantity',
-                // 'NAME ' => 'MASTER',        
-                // 'NAME ' => 'MASTER', 
+                     
                 'TRDATETIME' => 'created_at',
                 'CREATED_ON' => 'created_at',
                 'UPDATED_ON' => 'updated_at',

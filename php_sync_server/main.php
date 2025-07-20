@@ -6,7 +6,7 @@ $db = new mysql();
 
 // insertSyncLog();
 $last_synced_at = lastSyncAt();
-$last_synced_at = "2025-07-21 00:00:00"; // For testing purpose, set to a fixed date
+$last_synced_at = "2025-07-19 00:00:00"; // For testing purpose, set to a fixed date
 
 
 $ubsTables = Converter::ubsTable();
@@ -24,6 +24,7 @@ foreach($ubsTables as $ubs_table){
     $remote_data = $comparedData['remote_data'];
     $ubs_data = $comparedData['ubs_data'];
     
+    dump($comparedData);
     // $to_insert_ubs = [];
     // $to_update_ubs = [];
 

@@ -24,7 +24,7 @@ function tableMapping()
         'ubs_ubsstk2015_arpso' => 'orders',
         'ubs_ubsstk2015_icpso' => 'order_items',
 
-        
+
     ];
     return $TABLE_MAPPING;
 }
@@ -65,17 +65,52 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
     $map = Converter::mapColumns($remote_table_name);
 
-    foreach ($map as$ubs => $remote) {
+    foreach ($map as $ubs => $remote) {
         if ($direction === 'to_remote') {
             $converted[$remote] = $ubs ? ($dataRow[$ubs] ?? null) : null;
         } else {
             if ($ubs) {
-                $converted[$ubs] = $dataRow[$remote] ?? null;
+                $converted[$ubs] = $dataRow[$remote] ?? $remote;
             }
         }
     }
+
+    if ($direction == 'to_remote') {
+        foreach ($converted as $key => $val) {
+            $check_table_link = strpos($key, '|');
+            if ($check_table_link !== false || empty($key)) {
+                unset($converted[$key]);
+            }
+        }
+    }
+
+    if ($direction == 'to_ubs') {
+        $db = new mysql;
+        $db->connect_remote();
+        foreach ($converted as $key => $val) {
+            $check_table_link = strpos($val, '|');
+            if ($check_table_link !== false) {
+                $explode = explode('|', $val);
+                $table = $explode[0];
+                $field = $explode[1];
+
+                if ($remote_table_name == 'order_items') {
+                    $id = $dataRow['order_id'];
+                }
+
+                $sql = "SELECT $field FROM $table WHERE id='$id'";
+                $col = $db->first($sql);
+
+                $converted[$key] = $col[$field];
+            }
+        }
+    }
+    // dd($converted);
     return $converted;
 }
+
+
+
 
 
 function syncEntity($entity, $ubs_data, $remote_data)
@@ -83,27 +118,26 @@ function syncEntity($entity, $ubs_data, $remote_data)
     $remote_table_name = Converter::table_map($entity);
     $remote_key = Converter::primaryKey($remote_table_name);
     $ubs_key = Converter::primaryKey($entity);
-    
+
     $ubs_map = [];
     $remote_map = [];
 
     $is_composite_key = is_array($ubs_key);
-   
+
     foreach ($ubs_data as $row) {
-        if($is_composite_key){
+        if ($is_composite_key) {
             $composite_keys = [];
-            foreach($ubs_key as $k){
-                
+            foreach ($ubs_key as $k) {
+
                 $composite_keys[] = $row[$k];
             }
-            $composite_keys = implode('|',$composite_keys);
+            $composite_keys = implode('|', $composite_keys);
             $ubs_map[$composite_keys] = $row;
-        }else{
+        } else {
             $ubs_map[$row[$ubs_key]] = $row;
         }
-        
     }
-    
+
     foreach ($remote_data as $row) {
         $remote_map[$row[$remote_key]] = $row;
     }
@@ -119,15 +153,15 @@ function syncEntity($entity, $ubs_data, $remote_data)
         $ubs = $ubs_map[$key] ?? null;
         $remote = $remote_map[$key] ?? null;
 
-        if($ubs){
+        if ($ubs) {
             $ubs_time = strtotime($ubs['UPDATED_ON'] ?? '1970-01-01');
         }
-        if($remote){
+        if ($remote) {
             $remote_time = strtotime($remote['updated_at'] ?? '1970-01-01');
         }
-        
+
         if ($ubs && !$remote) {
-            $sync['remote_data'][] = convert($remote_table_name,$ubs, 'to_remote');
+            $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
         } elseif (!$ubs && $remote) {
             $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
         } elseif ($ubs && $remote) {
@@ -151,7 +185,7 @@ function upsertUbs($table, $record)
     $directory = strtoupper($arr['database']);
 
     $path = "C:/$directory/Sample/{$table}.dbf";
-    
+
 
     $editor = new \XBase\TableEditor($path, [
         'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE, // safer mode
@@ -159,22 +193,47 @@ function upsertUbs($table, $record)
 
     $found = false;
 
+    $BASE_RECORD = null;
     // UPDATE IF EXISTS
     while ($row = $editor->nextRecord()) {
-        
-        $keyValue = trim($row->get($keyField));
-        if ($keyValue === trim($record[$keyField])) {
+
+        if ($BASE_RECORD == null) {
+            if($row->get('TYPE') == 'SO' && $row->get('REFNO') == 'SO00003' ){
+                $BASE_RECORD = $row->getData();
+                $BASE_RECORD = array_change_key_case($BASE_RECORD, CASE_UPPER);
+                // dd($BASE_RECORD);
+            }
+            
+        }
+
+        if (is_array($keyField)) {
+            $composite_keys = [];
+            $record_composite_keys = [];
+            foreach ($keyField as $k) {
+                $composite_keys[] = trim($row->get($k));
+                $record_composite_keys[] = trim($record[$k]);
+            }
+            $keyValue = implode('|', $composite_keys);
+            $recordKeyValue = implode('|', $record_composite_keys);
+        } else {
+            $keyValue = trim($row->get($keyField));
+            $recordKeyValue = trim($record[$keyField]);
+        }
+
+        if ($keyValue === $recordKeyValue) {
+            // dump($row);
+            // dump("$keyValue === $recordKeyValue");
             foreach ($record as $field => $value) {
-                if(in_array($field,['DATE','PLA_DODATE'])){
+                if (in_array($field, ['DATE', 'PLA_DODATE'])) {
                     $value = date('Ymd', strtotime($value));
                 }
-                
+
                 // dump("$field => $value");
                 $row->set($field, $value);
             }
-            
-            $editor->writeRecord(); 
-            $editor->save(); 
+
+            $editor->writeRecord();
+            $editor->save();
 
             $found = true;
             break;
@@ -182,20 +241,49 @@ function upsertUbs($table, $record)
     }
 
     // INSERT IF NOT FOUND
+    $structure = [];
+    foreach ($editor->getColumns() as $column) {
+        $structure[strtoupper($column->getName())] = $column->getType();
+    };
+
     if (!$found) {
         $newRow = $editor->appendRecord();
+
+        $new_record = $BASE_RECORD;
+
+
         foreach ($record as $field => $value) {
-            $newRow->set($field, $value);
+            $new_record[$field] = $value;
+        }
+        // dump($new_record);
+        foreach ($new_record as $field => $value) {
+            try {
+                if ($value === null) $value = "";
+
+                if($structure[$field] == 'L' && empty($value)){
+                    $value = false;
+                }
+                if ($structure[$field] === 'D') {
+                    // Normalize to 8-character DBF format
+                    $value = date('Ymd', strtotime($value));
+                }
+
+                $newRow->set($field, $value);
+            } catch (\Throwable $e) {
+                var_dump($fieldType);
+                var_dump($value);
+                dump("$field => $value caused problem");
+                dd($e->getMessage());
+            }
         }
         $editor->writeRecord(); // commit the new record
-        $editor->save()->close(); 
+        $editor->save()->close();
     }
-
-    
 }
 
 
-function upsertRemote($table, $record){
+function upsertRemote($table, $record)
+{
     $Core = Core::getInstance();
     $remote_table_name = Converter::table_map($table);
     $primary_key = Converter::primaryKey($remote_table_name);
@@ -204,25 +292,23 @@ function upsertRemote($table, $record){
     $db->connect_remote();
 
     $table_convert = ['orders'];
-    
-    if(in_array($remote_table_name,$table_convert)){
+
+    if (in_array($remote_table_name, $table_convert)) {
         $customer_lists = $Core->remote_customer_lists;
         $customer_id = $customer_lists[$record['customer_code']] ?? null;
         $record['customer_id'] = $customer_id;
-        unset($record['customer_code']);
     }
 
-    if($remote_table_name == 'order_items'){
+    if ($remote_table_name == 'order_items') {
         $order_lists = $Core->remote_order_lists;
-        $record[$primary_key] = $record['reference_no'] . '|'.$record['item_count'];
+        $record[$primary_key] = $record['reference_no'] . '|' . $record['item_count'];
         $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
     }
 
     // dd($record);
     // dd($primary_key);
-    
-    $db->update_or_insert($remote_table_name,[$primary_key => $record[$primary_key]],$record);
-    
+
+    $db->update_or_insert($remote_table_name, [$primary_key => $record[$primary_key]], $record);
 }
 
 
@@ -265,8 +351,8 @@ function read_dbf($dbf_file_path)
             foreach ($structure as $field) {
                 $name = $field['name'];
                 $value = $record->$name; // access as object property
-                $rowData[$name] = ($value instanceof \DateTimeInterface) 
-                    ? $value->format('Y-m-d') 
+                $rowData[$name] = ($value instanceof \DateTimeInterface)
+                    ? $value->format('Y-m-d')
                     : trim((string)$value);
             }
 
@@ -322,7 +408,7 @@ function sync_all_dbf_to_local()
 
                 $data = read_dbf($full_path); // return ['structure'=>[], 'rows'=>[]]
                 $table_name = strtolower("ubs_{$directory_name}_{$dbf_name}");
-                
+
 
                 // Optional: Clean table before insert
                 $db->query("DELETE FROM {$table_name}");
