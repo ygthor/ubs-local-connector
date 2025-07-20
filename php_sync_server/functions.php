@@ -20,6 +20,11 @@ function tableMapping()
         'ubs_ubsstk2015_arcust' => 'vendor',
         'ubs_ubsstk2015_artran' => 'vendor',
         'ubs_ubsstk2015_ictran' => 'vendor',
+
+        'ubs_ubsstk2015_arpso' => 'orders',
+        'ubs_ubsstk2015_icpso' => 'order_items',
+
+        
     ];
     return $TABLE_MAPPING;
 }
@@ -41,48 +46,16 @@ function lastSyncAt()
 
 function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
 {
-    $apiUrl = ENV::API_URL . '/api/data_sync';
+    $db = new mysql;
+    $db->connect_remote();
 
     $TABLE_MAPPING = tableMapping();
     $alias_table = $TABLE_MAPPING[$table];
 
-    $postData = [
-        'table' => $alias_table,
-    ];
-
-    if ($updatedAfter) {
-        $postData['updated_after'] = $updatedAfter;
-    }
-
-    $ch = curl_init($apiUrl);
-
-    $headers = [
-        'Content-Type: application/json',
-    ];
-
-    if ($bearerToken) {
-        $headers[] = 'Authorization: Bearer ' . $bearerToken;
-    }
-
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($postData));
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-    if (curl_errno($ch)) {
-        throw new Exception('Curl error: ' . curl_error($ch));
-    }
-
-    curl_close($ch);
-
-    if ($httpCode !== 200) {
-        throw new Exception("API returned HTTP $httpCode: $response");
-    }
-
-    return json_decode($response, true);
+    $column_updated_at = "updated_at";
+    $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
+    $data = $db->get($sql);
+    return $data;
 }
 
 
@@ -92,7 +65,7 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
     $map = Converter::mapColumns($remote_table_name);
 
-    foreach ($map as $remote => $ubs) {
+    foreach ($map as$ubs => $remote) {
         if ($direction === 'to_remote') {
             $converted[$remote] = $ubs ? ($dataRow[$ubs] ?? null) : null;
         } else {
@@ -113,20 +86,31 @@ function syncEntity($entity, $ubs_data, $remote_data)
     
     $ubs_map = [];
     $remote_map = [];
-    
-    foreach ($ubs_data as $row) {
-        $ubs_map[$row[$ubs_key]] = $row;
-    }
 
+    $is_composite_key = is_array($ubs_key);
+   
+    foreach ($ubs_data as $row) {
+        if($is_composite_key){
+            $composite_keys = [];
+            foreach($ubs_key as $k){
+                
+                $composite_keys[] = $row[$k];
+            }
+            $composite_keys = implode('|',$composite_keys);
+            $ubs_map[$composite_keys] = $row;
+        }else{
+            $ubs_map[$row[$ubs_key]] = $row;
+        }
+        
+    }
+    
     foreach ($remote_data as $row) {
         $remote_map[$row[$remote_key]] = $row;
     }
 
     $sync = [
-        'to_insert_remote' => [],
-        'to_update_remote' => [],
-        'to_insert_ubs' => [],
-        'to_update_ubs' => [],
+        'remote_data' => [],
+        'ubs_data' => [],
     ];
 
     $all_keys = array_unique(array_merge(array_keys($ubs_map), array_keys($remote_map)));
@@ -142,16 +126,15 @@ function syncEntity($entity, $ubs_data, $remote_data)
             $remote_time = strtotime($remote['updated_at'] ?? '1970-01-01');
         }
         
-
         if ($ubs && !$remote) {
-            $sync['to_insert_remote'][] = convert($remote_table_name,$ubs, 'to_remote');
+            $sync['remote_data'][] = convert($remote_table_name,$ubs, 'to_remote');
         } elseif (!$ubs && $remote) {
-            $sync['to_insert_ubs'][] = convert($remote_table_name, $remote, 'to_ubs');
+            $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
         } elseif ($ubs && $remote) {
             if ($ubs_time > $remote_time) {
-                $sync['to_update_remote'][] = convert($remote_table_name, $ubs, 'to_remote');
+                $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
             } elseif ($remote_time > $ubs_time) {
-                $sync['to_update_ubs'][] = convert($remote_table_name, $remote, 'to_ubs');
+                $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
             }
         }
     }
@@ -182,6 +165,11 @@ function upsertUbs($table, $record)
         $keyValue = trim($row->get($keyField));
         if ($keyValue === trim($record[$keyField])) {
             foreach ($record as $field => $value) {
+                if(in_array($field,['DATE','PLA_DODATE'])){
+                    $value = date('Ymd', strtotime($value));
+                }
+                
+                // dump("$field => $value");
                 $row->set($field, $value);
             }
             
@@ -208,12 +196,31 @@ function upsertUbs($table, $record)
 
 
 function upsertRemote($table, $record){
+    $Core = Core::getInstance();
     $remote_table_name = Converter::table_map($table);
     $primary_key = Converter::primaryKey($remote_table_name);
 
     $db = new mysql;
     $db->connect_remote();
 
+    $table_convert = ['orders'];
+    
+    if(in_array($remote_table_name,$table_convert)){
+        $customer_lists = $Core->remote_customer_lists;
+        $customer_id = $customer_lists[$record['customer_code']] ?? null;
+        $record['customer_id'] = $customer_id;
+        unset($record['customer_code']);
+    }
+
+    if($remote_table_name == 'order_items'){
+        $order_lists = $Core->remote_order_lists;
+        $record[$primary_key] = $record['reference_no'] . '|'.$record['item_count'];
+        $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
+    }
+
+    // dd($record);
+    // dd($primary_key);
+    
     $db->update_or_insert($remote_table_name,[$primary_key => $record[$primary_key]],$record);
     
 }

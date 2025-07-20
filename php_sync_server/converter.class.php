@@ -5,7 +5,7 @@ class Converter
     static function ubsTable()
     {
         $dbf_arr = [
-            'ubs_ubsacc2015_arcust',
+            // 'ubs_ubsacc2015_arcust',
             // 'ubs_ubsacc2015_apvend',
             // 'ubs_ubsacc2015_arpay',// => receipt
             // 'ubs_ubsacc2015_arpost',// => order
@@ -24,8 +24,8 @@ class Converter
 
             'ubs_ubsstk2015_arpso', // order
             'ubs_ubsstk2015_icpso', // order item
-            'ubs_ubsstk2015_artran', // invoice
-            'ubs_ubsstk2015_ictran', // invoice item
+            // 'ubs_ubsstk2015_artran', // invoice
+            // 'ubs_ubsstk2015_ictran', // invoice item
         ];
         return $dbf_arr;
     }
@@ -39,14 +39,19 @@ class Converter
             'ubs_ubsacc2015_arpost' => 'ENTRY',
 
 
-            'ubs_ubsacc2015_arpost' => 'REFNO',
+            'ubs_ubsstk2015_arpso' => 'REFNO',
             'ubs_ubsstk2015_icpso' => [
                 'REFNO',
                 'ITEMCOUNT'
             ],
 
+            
+
 
             'customers' => 'customer_code',
+            'orders' => 'reference_no',
+            'order_items' => 'unique_key',
+            
         ];
 
         return $maps[$entity] ?? null;
@@ -101,33 +106,63 @@ class Converter
             ],
 
             'orders' => [
-                'REFNO'       => '', // key was empty
-                'CUSTNO'      => 'customer_code',
-                'DATE'        => 'date',
+                'TYPE' => 'type',
+                'REFNO'       => 'reference_no', // key was empty
+                'CUSTNO'      => 'customer_code', // link using customer id
+                'NAME' => 'customer_name',
+                'DATE'        => 'order_date',
                 'DESP'        => 'description',
                 'GROSS_BIL'   => 'gross_amount',
                 'TAX1_BIL'    => 'tax1',
-                'TAX2_BIL'    => 'tax2',
-                'TAX3_BIL'    => 'tax3',
+                // 'TAX2_BIL'    => 'tax2',
+                // 'TAX3_BIL'    => 'tax3',
                 'TAX1'    => 'tax1',
-                'TAX2'    => 'tax2',
-                'TAX3'    => 'tax3',
+                // 'TAX2'    => 'tax2',
+                // 'TAX3'    => 'tax3',
                 'TAXP1'       => 'tax1_percentage',
-                'TAXP2'       => 'tax2_percentage',
-                'TAXP3'       => 'tax3_percentage',
-                'TAX'         => 'total_tax',
+                // 'TAXP2'       => 'tax2_percentage',
+                // 'TAXP3'       => 'tax3_percentage',
+                'TAX'         => 'tax1',
                 'GRAND_BIL'   => 'grand_amount',
                 'GRAND'   => 'grand_amount',
-                'INVGROSS'    => 'inv_gross',
+                'INVGROSS'    => 'net_amount',
                 'DISCOUNT'    => 'discount',
                 'NET'         => 'net_amount',
                 'CREATED_ON' => 'created_at',
-                'PLA_DODATE' => 'created_at',
+                'PLA_DODATE' => 'order_date',
                 'UPDATED_ON' => 'updated_at',
-                'NAME' => 'customer_name'
+
             ],
 
-            
+            'order_items' => [
+                // 'TYPE' => 'MASTER',
+                // 'TRANCODE' => 'MASTER',
+                // 'CUSTNO' => 'MASTER',
+                // 'DATE' => 'MASTER',
+                'REFNO'       => 'reference_no', 
+                'ITEMCOUNT' => 'item_count',
+                'ITEMNO' => 'product_no',
+                'DESP' => 'description',
+                'QTY_BIL' => 'quantity',
+                'PRICE_BIL' => 'unit_price',
+                'UNIT_BIL' => 'unit',
+                'AMT1_BIL' => 'amount',
+                'AMT_BIL' => 'amount',
+                'QTY' => 'quantity',
+                'PRICE' => 'unit_price',
+                'UNIT' => 'unit',
+                'AMT1' => 'amount',
+                'AMT' => 'amount',
+                'QTY1' => 'quantity',
+                // 'NAME ' => 'MASTER',        
+                // 'NAME ' => 'MASTER', 
+                'TRDATETIME' => 'created_at',
+                'CREATED_ON' => 'created_at',
+                'UPDATED_ON' => 'updated_at',
+
+            ],
+
+
 
 
 

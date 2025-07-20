@@ -6,7 +6,7 @@ $db = new mysql();
 
 // insertSyncLog();
 $last_synced_at = lastSyncAt();
-$last_synced_at = "20025-07-06 00:00:00"; // For testing purpose, set to a fixed date
+$last_synced_at = "2025-07-21 00:00:00"; // For testing purpose, set to a fixed date
 
 
 $ubsTables = Converter::ubsTable();
@@ -21,24 +21,27 @@ foreach($ubsTables as $ubs_table){
 
     $comparedData = syncEntity($ubs_table,$ubs_data, $remote_data);
 
-    $to_insert_ubs = $comparedData['to_insert_ubs'];
-    $to_insert_remote = $comparedData['to_insert_remote'];
-    $to_update_ubs = $comparedData['to_update_ubs'];
-    $to_update_remote = $comparedData['to_update_remote'];
+    $remote_data = $comparedData['remote_data'];
+    $ubs_data = $comparedData['ubs_data'];
+    
+    // $to_insert_ubs = [];
+    // $to_update_ubs = [];
 
-    foreach($to_insert_remote as $arr){
+
+    foreach($remote_data as $arr){
         upsertRemote($ubs_table,$arr,);
     }
-    foreach($to_update_remote as $arr){
-        upsertRemote($ubs_table,$arr,);
-    }
-    foreach($to_insert_ubs as $arr){
-        upsertUbs($ubs_table,$arr);
-    }
-    foreach($to_update_ubs as $arr){
+    foreach($ubs_data as $arr){
         upsertUbs($ubs_table,$arr);
     }
 
+
+    $table_trigger_reset = ['customer','orders'];
+    $remote_table_name = Converter::table_map($ubs_table);
+    if(in_array($remote_table_name,$table_trigger_reset)){
+        $Core = Core::getInstance();
+        $Core->initRemoteData();
+    }
 }
 
 
