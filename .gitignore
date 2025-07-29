@@ -31,3 +31,4 @@ coverage/
 .idea/
 .vscode/
 .DS_Store
+php_sync_server/dbf_scripts

@@ -198,11 +198,11 @@ function upsertUbs($table, $record)
     while ($row = $editor->nextRecord()) {
 
         if ($BASE_RECORD == null) {
-            if($row->get('TYPE') == 'SO' && $row->get('REFNO') == 'SO00003' ){
+            // if($row->get('TYPE') == 'SO' && $row->get('REFNO') == 'SO00003' ){
                 $BASE_RECORD = $row->getData();
                 $BASE_RECORD = array_change_key_case($BASE_RECORD, CASE_UPPER);
                 // dd($BASE_RECORD);
-            }
+            // }
             
         }
 
@@ -221,7 +221,7 @@ function upsertUbs($table, $record)
         }
 
         if ($keyValue === $recordKeyValue) {
-            // dump($row);
+            dump("update: $keyValue");
             // dump("$keyValue === $recordKeyValue");
             foreach ($record as $field => $value) {
                 if (in_array($field, ['DATE', 'PLA_DODATE'])) {
@@ -234,6 +234,7 @@ function upsertUbs($table, $record)
 
             $editor->writeRecord();
             $editor->save();
+            $editor->close();
 
             $found = true;
             break;
@@ -247,6 +248,7 @@ function upsertUbs($table, $record)
     };
 
     if (!$found) {
+        dump('insert');
         $newRow = $editor->appendRecord();
 
         $new_record = $BASE_RECORD;

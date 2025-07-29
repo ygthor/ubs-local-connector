@@ -5,7 +5,7 @@ class Converter
     static function ubsTable()
     {
         $dbf_arr = [
-            // 'ubs_ubsacc2015_arcust',
+            'ubs_ubsacc2015_arcust',
             // 'ubs_ubsacc2015_apvend',
             // 'ubs_ubsacc2015_arpay',// => receipt
             // 'ubs_ubsacc2015_arpost',// => order

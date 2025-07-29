@@ -5,14 +5,15 @@ import time
 
 def main():
     # test_server_response()
+    sync_all()
 
-    while True:
-        # Call your function or logic here
-        print("Running task...")
-        sync_all()
-        # Wait 5 seconds
-        print("Waiting ... ... ...")
-        time.sleep(30)
+    # while True:
+    #     # Call your function or logic here
+    #     print("Running task...")
+    #     sync_all()
+    #     # Wait 5 seconds
+    #     print("Waiting ... ... ...")
+    #     time.sleep(30)
         
 
     # single_sync()
