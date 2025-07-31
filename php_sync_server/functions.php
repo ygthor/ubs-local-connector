@@ -54,6 +54,7 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
 
     $column_updated_at = "updated_at";
     $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
+    dump($sql);
     $data = $db->get($sql);
     return $data;
 }

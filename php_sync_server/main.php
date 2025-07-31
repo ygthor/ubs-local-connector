@@ -9,7 +9,7 @@ $db = new mysql();
 
 // insertSyncLog();
 $last_synced_at = lastSyncAt();
-// $last_synced_at = "2025-07-20 00:00:00"; // For testing purpose, set to a fixed date
+$last_synced_at = "2025-08-01 00:20:00"; // For testing purpose, set to a fixed date
 
 $ubsTables = Converter::ubsTable();
 
