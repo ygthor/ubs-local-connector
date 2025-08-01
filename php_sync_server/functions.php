@@ -372,62 +372,62 @@ function read_dbf($dbf_file_path)
 }
 
 
-function sync_all_dbf_to_local()
-{
-    $directory_arr = ['UBSACC2015', 'UBSSTK2015'];
-    $dbf_arr = [
-        // 'arcust',
-        // 'apvend',
-        // 'artran',
-        // 'icarea',
-        // 'icitem',
-        // 'ictran',
-        // 'arpay',
-        // 'arpost',
-        // 'gldata',
-        // 'glbatch',
-        // 'glpost',
+// function sync_all_dbf_to_local()
+// {
+//     $directory_arr = ['UBSACC2015', 'UBSSTK2015'];
+//     $dbf_arr = [
+//         // 'arcust',
+//         // 'apvend',
+//         // 'artran',
+//         // 'icarea',
+//         // 'icitem',
+//         // 'ictran',
+//         // 'arpay',
+//         // 'arpost',
+//         // 'gldata',
+//         // 'glbatch',
+//         // 'glpost',
 
-        'arpso',
-    ];
+//         'arpso',
+//     ];
 
-    $db = new mysql;
-    $db->connect();
+//     $db = new mysql;
+//     $db->connect();
 
-    foreach ($directory_arr as $directory_name) {
-        $directory_path = "C:/{$directory_name}/Sample";
+//     foreach ($directory_arr as $directory_name) {
+//         $directory_path = "C:/{$directory_name}/Sample";
 
-        foreach ($dbf_arr as $dbf_name) {
-            $file_name = $dbf_name . '.dbf';
-            $full_path = $directory_path . '/' . $file_name;
+//         foreach ($dbf_arr as $dbf_name) {
+//             $file_name = $dbf_name . '.dbf';
+//             $full_path = $directory_path . '/' . $file_name;
 
-            if (!file_exists($full_path)) {
-                echo "Skipping missing file: $full_path\n";
-                continue;
-            }
+//             if (!file_exists($full_path)) {
+//                 echo "Skipping missing file: $full_path\n";
+//                 continue;
+//             }
 
-            try {
-                echo "Processing $full_path...\n";
+//             try {
+//                 echo "Processing $full_path...\n";
 
-                $data = read_dbf($full_path); // return ['structure'=>[], 'rows'=>[]]
-                $table_name = strtolower("ubs_{$directory_name}_{$dbf_name}");
+//                 $data = read_dbf($full_path); // return ['structure'=>[], 'rows'=>[]]
+//                 $table_name = strtolower("ubs_{$directory_name}_{$dbf_name}");
 
 
-                // Optional: Clean table before insert
-                $db->query("DELETE FROM {$table_name}");
+//                 // Optional: Clean table before insert
+//                 $db->query("DELETE FROM {$table_name}");
 
-                // Insert row by row
-                foreach ($data['rows'] as $row) {
-                    $db->insert($table_name, $row);
-                }
+//                 // Insert row by row
+//                 foreach ($data['rows'] as $row) {
+//                     $db->insert($table_name, $row);
+//                 }
 
-                echo "Inserted " . count($data['rows']) . " rows into {$table_name}<br>\n";
-            } catch (Exception $e) {
-                echo "Error processing $file_name: " . $e->getMessage() . "\n";
-            }
-        }
-    }
-}
+//                 echo "Inserted " . count($data['rows']) . " rows into {$table_name}<br>\n";
+//             } catch (Exception $e) {
+//                 echo "Error processing $file_name: " . $e->getMessage() . "\n";
+//             }
+//         }
+//     }
+// }
 
 function parseUbsTable($input)
 {

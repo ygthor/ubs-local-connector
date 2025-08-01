@@ -53,7 +53,4 @@ $db->insert('sync_logs',[
 ]);
 
 
-
-// sync_all_dbf_to_local();
-
 dd('SUCCESS');
