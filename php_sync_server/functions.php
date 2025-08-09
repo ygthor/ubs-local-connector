@@ -18,16 +18,17 @@ function tableMapping()
 
         'ubs_ubsstk2015_apvend' => 'vendor',
         'ubs_ubsstk2015_arcust' => 'vendor',
-        'ubs_ubsstk2015_artran' => 'vendor',
-        'ubs_ubsstk2015_ictran' => 'vendor',
+
+        'ubs_ubsstk2015_artran' => 'artrans',
+        'ubs_ubsstk2015_ictran' => 'artrans_items',
 
         'ubs_ubsstk2015_arpso' => 'orders',
         'ubs_ubsstk2015_icpso' => 'order_items',
-
-
     ];
     return $TABLE_MAPPING;
 }
+
+
 
 
 function insertSyncLog()
@@ -52,9 +53,17 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
     $TABLE_MAPPING = tableMapping();
     $alias_table = $TABLE_MAPPING[$table];
 
-    $column_updated_at = "updated_at";
+    $arr_cloned_ubs = [
+        'artrans',
+        'artrans_items'
+    ];
+    if (in_array($alias_table, $arr_cloned_ubs)) {
+        $column_updated_at = "UPDATED_ON";
+    } else {
+        $column_updated_at = "updated_at";
+    }
+
     $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
-    dump($sql);
     $data = $db->get($sql);
     return $data;
 }
@@ -65,6 +74,13 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
     $converted = [];
 
     $map = Converter::mapColumns($remote_table_name);
+
+    if($map == []){
+        return $dataRow; // no need convert
+    }
+
+   
+ 
 
     foreach ($map as $ubs => $remote) {
         if ($direction === 'to_remote') {
@@ -119,11 +135,17 @@ function syncEntity($entity, $ubs_data, $remote_data)
     $remote_table_name = Converter::table_map($entity);
     $remote_key = Converter::primaryKey($remote_table_name);
     $ubs_key = Converter::primaryKey($entity);
+    $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
 
     $ubs_map = [];
     $remote_map = [];
 
     $is_composite_key = is_array($ubs_key);
+    
+    if($remote_table_name == 'artrans'){
+        // dd($is_composite_key);
+    }
+    
 
     foreach ($ubs_data as $row) {
         if ($is_composite_key) {
@@ -149,7 +171,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
     ];
 
     $all_keys = array_unique(array_merge(array_keys($ubs_map), array_keys($remote_map)));
-
+    
     foreach ($all_keys as $key) {
         $ubs = $ubs_map[$key] ?? null;
         $remote = $remote_map[$key] ?? null;
@@ -158,7 +180,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
             $ubs_time = strtotime($ubs['UPDATED_ON'] ?? '1970-01-01');
         }
         if ($remote) {
-            $remote_time = strtotime($remote['updated_at'] ?? '1970-01-01');
+            $remote_time = strtotime($remote[$column_updated_at] ?? '1970-01-01');
         }
 
         if ($ubs && !$remote) {
@@ -173,6 +195,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
             }
         }
     }
+    
     return $sync;
 }
 
@@ -200,11 +223,11 @@ function upsertUbs($table, $record)
 
         if ($BASE_RECORD == null) {
             // if($row->get('TYPE') == 'SO' && $row->get('REFNO') == 'SO00003' ){
-                $BASE_RECORD = $row->getData();
-                $BASE_RECORD = array_change_key_case($BASE_RECORD, CASE_UPPER);
-                // dd($BASE_RECORD);
+            $BASE_RECORD = $row->getData();
+            $BASE_RECORD = array_change_key_case($BASE_RECORD, CASE_UPPER);
+            // dd($BASE_RECORD);
             // }
-            
+
         }
 
         if (is_array($keyField)) {
@@ -263,7 +286,7 @@ function upsertUbs($table, $record)
             try {
                 if ($value === null) $value = "";
 
-                if($structure[$field] == 'L' && empty($value)){
+                if ($structure[$field] == 'L' && empty($value)) {
                     $value = false;
                 }
                 if ($structure[$field] === 'D') {
@@ -289,6 +312,7 @@ function upsertRemote($table, $record)
 {
     $Core = Core::getInstance();
     $remote_table_name = Converter::table_map($table);
+    dump($remote_table_name);
     $primary_key = Converter::primaryKey($remote_table_name);
 
     $db = new mysql;
@@ -308,10 +332,26 @@ function upsertRemote($table, $record)
         $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
     }
 
-    // dd($record);
-    // dd($primary_key);
+    if ($remote_table_name == 'artrans_items') {
+        $remote_artrans_lists = $Core->remote_artrans_lists;
+        $record[$primary_key] = $record['REFNO'] . '|' . $record['ITEMCOUNT'];
+        $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
+    }
 
-    $db->update_or_insert($remote_table_name, [$primary_key => $record[$primary_key]], $record);
+    if($remote_table_name == 'artrans' ){
+        // dd($record);
+        // dd($primary_key);
+    }
+    
+    if(count($record) > 0){
+        if($remote_table_name == 'artrans_items'){
+            // dd($primary_key);
+            // dd($record);
+        }
+        
+        $db->update_or_insert($remote_table_name, [$primary_key => $record[$primary_key]], $record);
+    }
+    
 }
 
 

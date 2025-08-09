@@ -48,8 +48,9 @@ def sync_to_mysql(table_name, structures, rows):
     cursor = connection.cursor()
 
      # Truncate table to remove old data
-    truncate_sql = f"TRUNCATE TABLE `{table_name}`"
-    cursor.execute(truncate_sql)
+    cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
+    if cursor.fetchone():
+        cursor.execute(f"TRUNCATE TABLE `{table_name}`")
     
     try:
         # Create table if not exists
@@ -285,6 +286,35 @@ def generate_postgresql_insert_sql(table_name, structures):
     INSERT INTO "{table_name}" ({', '.join(columns)}) 
     VALUES ({', '.join(placeholders)})
     '''
+
+def create_sync_logs_table():
+    try:
+        connection = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="",  # Replace with your actual password
+            database="ubs_data"
+        )
+
+        cursor = connection.cursor()
+
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS `sync_logs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `synced_at` DATETIME NOT NULL
+        );
+        """
+
+        cursor.execute(create_table_sql)
+        connection.commit()
+        print("Table 'sync_logs' created or already exists.")
+
+    except Error as e:
+        print(f"Error creating table: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 # Example usage:
 # Replace your original sync_to_server function call with:

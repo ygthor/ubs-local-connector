@@ -5,7 +5,12 @@ class Converter
     static function ubsTable()
     {
         $dbf_arr = [
-            'ubs_ubsacc2015_arcust',
+            // 'ubs_ubsacc2015_arcust',
+            // 'ubs_ubsstk2015_arpso', // order
+            // 'ubs_ubsstk2015_icpso', // order item
+            'ubs_ubsstk2015_artran', // invoice
+            'ubs_ubsstk2015_ictran', // invoice item
+
             // 'ubs_ubsacc2015_apvend',
             // 'ubs_ubsacc2015_arpay',// => receipt
             // 'ubs_ubsacc2015_arpost',// => order
@@ -22,10 +27,7 @@ class Converter
             // 'ubs_ubsstk2015_icitem',
             // 'ubs_ubsstk2015_ictran',
 
-            'ubs_ubsstk2015_arpso', // order
-            'ubs_ubsstk2015_icpso', // order item
-            // 'ubs_ubsstk2015_artran', // invoice
-            // 'ubs_ubsstk2015_ictran', // invoice item
+            
         ];
         return $dbf_arr;
     }
@@ -37,10 +39,17 @@ class Converter
             'ubs_ubsacc2015_arcust' => 'CUSTNO',
             'ubs_ubsacc2015_arpay' => 'CUSTNO',
             'ubs_ubsacc2015_arpost' => 'ENTRY',
+            
 
 
             'ubs_ubsstk2015_arpso' => 'REFNO',
             'ubs_ubsstk2015_icpso' => [
+                'REFNO',
+                'ITEMCOUNT'
+            ],
+
+            'ubs_ubsstk2015_artran' => 'REFNO',
+            'ubs_ubsstk2015_ictran' => [
                 'REFNO',
                 'ITEMCOUNT'
             ],
@@ -51,6 +60,8 @@ class Converter
             'customers' => 'customer_code',
             'orders' => 'reference_no',
             'order_items' => 'unique_key',
+            'artrans' => 'REFNO',
+            'artrans_items' => 'unique_key',
             
         ];
 
@@ -71,6 +82,9 @@ class Converter
             'ubs_ubsacc2015_arcust' => 'customers',
             'ubs_ubsstk2015_arpso' => 'orders',
             'ubs_ubsstk2015_icpso' => 'order_items',
+
+            'ubs_ubsstk2015_artran' => 'artrans',
+            'ubs_ubsstk2015_ictran' => 'artrans_items',
         ];
 
         return $maps[$entity] ?? null;
@@ -170,5 +184,15 @@ class Converter
         ];
 
         return $maps[$entity] ?? [];
+    }
+
+
+    static function mapUpdatedAtField($remote_table){
+        $maps = [
+            'artrans' => 'UPDATED_ON',
+            'artrans_items' => 'UPDATED_ON',
+        ];
+
+        return $maps[$remote_table] ?? 'updated_at'; // default
     }
 }
