@@ -1,36 +1,5 @@
 <?php
 
-// ubs table => kanesan table
-function tableMapping()
-{
-    $TABLE_MAPPING = [
-        'ubs_ubsacc2015_arcust' => 'customers', // Customer master data (Account Receivable)
-        'ubs_ubsacc2015_apvend' => 'vendor', // Vendor master data (Account Payable)
-
-        'ubs_ubsacc2015_arpost' => 'vendor', // Customer invoice posting
-        'ubs_ubsacc2015_artran' => 'vendor', // Customer transaction details
-
-        'ubs_ubsacc2015_glbatch' => 'vendor', // GL batch header
-        'ubs_ubsacc2015_gldata' => 'vendor', // General Ledger transactions
-
-        'ubs_ubsacc2015_glpost' => 'vendor', // Posted General Ledger entries
-        'ubs_ubsacc2015_ictran' => 'vendor', // Inventory transactions
-
-        'ubs_ubsstk2015_apvend' => 'vendor',
-        'ubs_ubsstk2015_arcust' => 'vendor',
-
-        'ubs_ubsstk2015_artran' => 'artrans',
-        'ubs_ubsstk2015_ictran' => 'artrans_items',
-
-        'ubs_ubsstk2015_arpso' => 'orders',
-        'ubs_ubsstk2015_icpso' => 'order_items',
-    ];
-    return $TABLE_MAPPING;
-}
-
-
-
-
 function insertSyncLog()
 {
     $db = new mysql();
@@ -50,18 +19,9 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
     $db = new mysql;
     $db->connect_remote();
 
-    $TABLE_MAPPING = tableMapping();
-    $alias_table = $TABLE_MAPPING[$table];
+    $alias_table = Converter::table_convert_remote($table);
 
-    $arr_cloned_ubs = [
-        'artrans',
-        'artrans_items'
-    ];
-    if (in_array($alias_table, $arr_cloned_ubs)) {
-        $column_updated_at = "UPDATED_ON";
-    } else {
-        $column_updated_at = "updated_at";
-    }
+    $column_updated_at = Converter::mapUpdatedAtField($alias_table);
 
     $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
     $data = $db->get($sql);
@@ -75,12 +35,12 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
     $map = Converter::mapColumns($remote_table_name);
 
-    if($map == []){
+    if ($map == []) {
         return $dataRow; // no need convert
     }
 
-   
- 
+
+
 
     foreach ($map as $ubs => $remote) {
         if ($direction === 'to_remote') {
@@ -132,7 +92,7 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
 function syncEntity($entity, $ubs_data, $remote_data)
 {
-    $remote_table_name = Converter::table_map($entity);
+    $remote_table_name = Converter::table_convert_remote($entity);
     $remote_key = Converter::primaryKey($remote_table_name);
     $ubs_key = Converter::primaryKey($entity);
     $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
@@ -141,11 +101,11 @@ function syncEntity($entity, $ubs_data, $remote_data)
     $remote_map = [];
 
     $is_composite_key = is_array($ubs_key);
-    
-    if($remote_table_name == 'artrans'){
+
+    if ($remote_table_name == 'artrans') {
         // dd($is_composite_key);
     }
-    
+
 
     foreach ($ubs_data as $row) {
         if ($is_composite_key) {
@@ -171,7 +131,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
     ];
 
     $all_keys = array_unique(array_merge(array_keys($ubs_map), array_keys($remote_map)));
-    
+
     foreach ($all_keys as $key) {
         $ubs = $ubs_map[$key] ?? null;
         $remote = $remote_map[$key] ?? null;
@@ -195,7 +155,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
             }
         }
     }
-    
+
     return $sync;
 }
 
@@ -209,14 +169,21 @@ function upsertUbs($table, $record)
     $table = $arr['table'];
     $directory = strtoupper($arr['database']);
 
-    if(in_array($table,['artran'])) return;
+    // if(in_array($table,['artran'])) return;
 
-    $path = "C:/$directory/Sample/{$table}.dbf";
+    $path = "C:/$directory/" . ENV::DBF_SUBPATH . "/{$table}.dbf";
 
 
     $editor = new \XBase\TableEditor($path, [
         'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE, // safer mode
     ]);
+
+    // Create a column map for easy access
+    $columns = $editor->getColumns();
+    $columnMap = [];
+    foreach ($columns as $column) {
+        $columnMap[$column->getName()] = $column;
+    }
 
     $found = false;
 
@@ -251,15 +218,79 @@ function upsertUbs($table, $record)
             dump("update: $keyValue");
             // dump("$keyValue === $recordKeyValue");
             foreach ($record as $field => $value) {
-                if (in_array($field, ['DATE', 'PLA_DODATE'])) {
-                    $value = date('Ymd', strtotime($value));
-                }
-                if(in_array($field,['artrans_id'])){
+                if (in_array($field, ['artrans_id'])) {
                     continue;
                 }
+                // Use the column map to get the column object directly
+                // need lowerr case
+                $column = $columnMap[strtolower($field)] ?? null;
+                if($column == null){
+                    continue;
+                }
+                $fieldType = $column->getType();
+                
+                // Handle boolean fields
+                if ($fieldType === 'L') {
+                    $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
+                }
+
+                // Handle date fields
+                if ($fieldType === 'D') {
+                    if (empty($value) || $value === '0000-00-00') {
+                        // Set empty date to 8 spaces
+                        $value = "        ";
+                    } else {
+                        // Ensure a valid timestamp can be created from the value
+                        $timestamp = strtotime($value);
+                        if ($timestamp !== false) {
+                            $value = date('Ymd', $timestamp);
+                        } else {
+                            // Handle invalid date strings gracefully. 
+                            // You might want to log this or set it to an empty date.
+                            dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to empty date.");
+                            $value = "        ";
+                        }
+                    }
+                }
+
+
+
+                // if (in_array($field, ['DATE', 'PLA_DODATE'])) {
+                //     $value = date('Ymd', strtotime($value));
+                // }
+              
+
+
+
+                // Check if the column is a boolean type
+                // $isBooleanFields = [
+                //     'URGENCY',
+                //     'TAXINCL',
+                //     'IMPSVC',
+                //     'FTP',
+                //     'DISPATCHED',
+                //     'WGST',
+                //     'APPLYSC',
+                //     'EDGSTAMT',
+                //     'RETEX',
+                //     'SB',
+                //     'IMPSVCT',
+                //     'AUTOMOBI',
+                //     'MODERNTRA',
+                //     'EINVSENT'
+                // ];
+
+
+                // if (in_array($field, $isBooleanFields)) {
+                //     $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
+                // }
 
                 // dump("$field => $value");
-                $row->set($field, $value);
+                try {
+                    $row->set($field, $value);
+                } catch (\Throwable $e) {
+                    dump($field);
+                }
             }
 
             $editor->writeRecord();
@@ -289,6 +320,7 @@ function upsertUbs($table, $record)
         }
         // dump($new_record);
         foreach ($new_record as $field => $value) {
+            if(!isset($structure[$field])) continue;
             try {
                 if ($value === null) $value = "";
 
@@ -317,7 +349,7 @@ function upsertUbs($table, $record)
 function upsertRemote($table, $record)
 {
     $Core = Core::getInstance();
-    $remote_table_name = Converter::table_map($table);
+    $remote_table_name = Converter::table_convert_remote($table);
     dump($remote_table_name);
     $primary_key = Converter::primaryKey($remote_table_name);
 
@@ -344,20 +376,19 @@ function upsertRemote($table, $record)
         $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
     }
 
-    if($remote_table_name == 'artrans' ){
+    if ($remote_table_name == 'artrans') {
         // dd($record);
         // dd($primary_key);
     }
-    
-    if(count($record) > 0){
-        if($remote_table_name == 'artrans_items'){
+
+    if (count($record) > 0) {
+        if ($remote_table_name == 'artrans_items') {
             // dd($primary_key);
             // dd($record);
         }
-        
+
         $db->update_or_insert($remote_table_name, [$primary_key => $record[$primary_key]], $record);
     }
-    
 }
 
 
@@ -416,64 +447,6 @@ function read_dbf($dbf_file_path)
         throw new Exception("Failed to read DBF file: " . $e->getMessage());
     }
 }
-
-
-// function sync_all_dbf_to_local()
-// {
-//     $directory_arr = ['UBSACC2015', 'UBSSTK2015'];
-//     $dbf_arr = [
-//         // 'arcust',
-//         // 'apvend',
-//         // 'artran',
-//         // 'icarea',
-//         // 'icitem',
-//         // 'ictran',
-//         // 'arpay',
-//         // 'arpost',
-//         // 'gldata',
-//         // 'glbatch',
-//         // 'glpost',
-
-//         'arpso',
-//     ];
-
-//     $db = new mysql;
-//     $db->connect();
-
-//     foreach ($directory_arr as $directory_name) {
-//         $directory_path = "C:/{$directory_name}/Sample";
-
-//         foreach ($dbf_arr as $dbf_name) {
-//             $file_name = $dbf_name . '.dbf';
-//             $full_path = $directory_path . '/' . $file_name;
-
-//             if (!file_exists($full_path)) {
-//                 echo "Skipping missing file: $full_path\n";
-//                 continue;
-//             }
-
-//             try {
-//                 echo "Processing $full_path...\n";
-
-//                 $data = read_dbf($full_path); // return ['structure'=>[], 'rows'=>[]]
-//                 $table_name = strtolower("ubs_{$directory_name}_{$dbf_name}");
-
-
-//                 // Optional: Clean table before insert
-//                 $db->query("DELETE FROM {$table_name}");
-
-//                 // Insert row by row
-//                 foreach ($data['rows'] as $row) {
-//                     $db->insert($table_name, $row);
-//                 }
-
-//                 echo "Inserted " . count($data['rows']) . " rows into {$table_name}<br>\n";
-//             } catch (Exception $e) {
-//                 echo "Error processing $file_name: " . $e->getMessage() . "\n";
-//             }
-//         }
-//     }
-// }
 
 function parseUbsTable($input)
 {

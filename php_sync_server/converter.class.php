@@ -2,20 +2,27 @@
 
 class Converter
 {
+    public static $table_cloned_ubs = [
+        'artrans',
+        'artrans_items',
+        'gldata'
+    ];
+
     static function ubsTable()
     {
         $dbf_arr = [
-            // 'ubs_ubsacc2015_arcust',
-            // 'ubs_ubsstk2015_arpso', // order
-            // 'ubs_ubsstk2015_icpso', // order item
+            'ubs_ubsacc2015_arcust',
+            'ubs_ubsstk2015_arpso', // order
+            'ubs_ubsstk2015_icpso', // order item
             'ubs_ubsstk2015_artran', // invoice
             'ubs_ubsstk2015_ictran', // invoice item
+            'ubs_ubsacc2015_gldata', // statement
 
             // 'ubs_ubsacc2015_apvend',
             // 'ubs_ubsacc2015_arpay',// => receipt
             // 'ubs_ubsacc2015_arpost',// => order
             // 'ubs_ubsacc2015_artran',
-            // 'ubs_ubsacc2015_gldata',
+            
             // 'ubs_ubsacc2015_glbatch',
             // 'ubs_ubsacc2015_glpost',
             // 'ubs_ubsacc2015_ictran',
@@ -39,8 +46,9 @@ class Converter
             'ubs_ubsacc2015_arcust' => 'CUSTNO',
             'ubs_ubsacc2015_arpay' => 'CUSTNO',
             'ubs_ubsacc2015_arpost' => 'ENTRY',
-            
 
+            'ubs_ubsacc2015_gldata' => 'ACCNO',
+            
 
             'ubs_ubsstk2015_arpso' => 'REFNO',
             'ubs_ubsstk2015_icpso' => [
@@ -62,6 +70,7 @@ class Converter
             'order_items' => 'unique_key',
             'artrans' => 'REFNO',
             'artrans_items' => 'unique_key',
+            'gldata' => 'ACCNO',
             
         ];
 
@@ -76,7 +85,7 @@ class Converter
 
         return $maps[$entity] ?? null;
     }
-    static function table_map($entity)
+    static function table_map()
     {
         $maps = [
             'ubs_ubsacc2015_arcust' => 'customers',
@@ -85,8 +94,14 @@ class Converter
 
             'ubs_ubsstk2015_artran' => 'artrans',
             'ubs_ubsstk2015_ictran' => 'artrans_items',
+            'ubs_ubsacc2015_gldata' => 'gldata',
         ];
 
+        return $maps;
+    }
+    static function table_convert_remote($entity)
+    {
+        $maps = self::table_map();
         return $maps[$entity] ?? null;
     }
 
@@ -179,7 +194,7 @@ class Converter
 
 
 
-
+            // auto map if identical
 
         ];
 
@@ -187,10 +202,13 @@ class Converter
     }
 
 
+
+
     static function mapUpdatedAtField($remote_table){
         $maps = [
             'artrans' => 'UPDATED_ON',
             'artrans_items' => 'UPDATED_ON',
+            'gldata' => 'UPDATED_ON',
         ];
 
         return $maps[$remote_table] ?? 'updated_at'; // default

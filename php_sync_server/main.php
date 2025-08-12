@@ -40,7 +40,7 @@ foreach($ubsTables as $ubs_table){
 
 
     $table_trigger_reset = ['customer','orders'];
-    $remote_table_name = Converter::table_map($ubs_table);
+    $remote_table_name = Converter::table_convert_remote($ubs_table);
     if(in_array($remote_table_name,$table_trigger_reset)){
         $Core = Core::getInstance();
         $Core->initRemoteData();

@@ -48,8 +48,10 @@ def sync_all():
         ],
     }
 
+    dbf_subpath=os.getenv("DBF_SUBPATH", "Sample")
+
     for directory_name, dbf_list in grouped_dbfs.items():
-        directory_path = f"C:/{directory_name}/Sample"
+        directory_path = f"C:/{directory_name}/"+dbf_subpath
         for dbf_name in dbf_list:
             file_name = dbf_name + ".dbf"
             full_path = os.path.join(directory_path, file_name)
