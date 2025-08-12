@@ -202,11 +202,14 @@ function syncEntity($entity, $ubs_data, $remote_data)
 
 function upsertUbs($table, $record)
 {
+
     $keyField = Converter::primaryKey($table);
 
     $arr = parseUbsTable($table);
     $table = $arr['table'];
     $directory = strtoupper($arr['database']);
+
+    if(in_array($table,['artran'])) return;
 
     $path = "C:/$directory/Sample/{$table}.dbf";
 
@@ -250,6 +253,9 @@ function upsertUbs($table, $record)
             foreach ($record as $field => $value) {
                 if (in_array($field, ['DATE', 'PLA_DODATE'])) {
                     $value = date('Ymd', strtotime($value));
+                }
+                if(in_array($field,['artrans_id'])){
+                    continue;
                 }
 
                 // dump("$field => $value");
