@@ -1,3 +1,5 @@
 dbfread
 requests
 python-dotenv
+mysql-connector-python
+dbf
