@@ -1,5 +1,62 @@
 <?php
 
+// Memory management functions
+function increaseMemoryLimit($limit = '512M')
+{
+    ini_set('memory_limit', $limit);
+    return ini_get('memory_limit');
+}
+
+function getMemoryUsage()
+{
+    return [
+        'memory_limit' => ini_get('memory_limit'),
+        'memory_usage' => memory_get_usage(true),
+        'memory_peak' => memory_get_peak_usage(true),
+        'memory_usage_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        'memory_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2)
+    ];
+}
+
+function optimizeMemoryUsage()
+{
+    // Force garbage collection
+    gc_collect_cycles();
+    
+    // Clear any cached data
+    if (function_exists('opcache_reset')) {
+        opcache_reset();
+    }
+    
+    return getMemoryUsage();
+}
+
+function batchProcessData($data, $batchSize = 1000, $callback)
+{
+    $total = count($data);
+    $processed = 0;
+    $results = [];
+    
+    for ($i = 0; $i < $total; $i += $batchSize) {
+        $batch = array_slice($data, $i, $batchSize);
+        $batchResults = $callback($batch);
+        $results = array_merge($results, $batchResults);
+        
+        $processed += count($batch);
+        
+        // Memory optimization between batches
+        if ($i + $batchSize < $total) {
+            gc_collect_cycles();
+        }
+        
+        // Log progress
+        $percentage = round(($processed / $total) * 100, 2);
+        dump("Processed: $processed/$total ($percentage%) - Memory: " . getMemoryUsage()['memory_usage_mb'] . "MB");
+    }
+    
+    return $results;
+}
+
 function insertSyncLog()
 {
     $db = new mysql();
@@ -16,15 +73,28 @@ function lastSyncAt()
 
 function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
 {
+    // Increase memory limit for large data fetching
+    increaseMemoryLimit('4G');
+    
     $db = new mysql;
     $db->connect_remote();
 
     $alias_table = Converter::table_convert_remote($table);
-
     $column_updated_at = Converter::mapUpdatedAtField($alias_table);
 
     $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
+    
+    // Log memory usage before fetching
+    $memoryBefore = getMemoryUsage();
+    dump("Memory before fetch: " . $memoryBefore['memory_usage_mb'] . "MB");
+    
     $data = $db->get($sql);
+    
+    // Log memory usage after fetching
+    $memoryAfter = getMemoryUsage();
+    dump("Memory after fetch: " . $memoryAfter['memory_usage_mb'] . "MB");
+    dump("Data rows fetched: " . count($data));
+    
     return $data;
 }
 
@@ -92,6 +162,9 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
 function syncEntity($entity, $ubs_data, $remote_data)
 {
+    // Increase memory limit for large sync operations
+    increaseMemoryLimit('4G');
+    
     $remote_table_name = Converter::table_convert_remote($entity);
     $remote_key = Converter::primaryKey($remote_table_name);
     $ubs_key = Converter::primaryKey($entity);
@@ -102,27 +175,53 @@ function syncEntity($entity, $ubs_data, $remote_data)
 
     $is_composite_key = is_array($ubs_key);
 
+    // Log initial memory usage
+    $memoryStart = getMemoryUsage();
+    dump("SyncEntity start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
+    dump("UBS data count: " . count($ubs_data));
+    dump("Remote data count: " . count($remote_data));
+
     if ($remote_table_name == 'artrans') {
         // dd($is_composite_key);
     }
 
-
-    foreach ($ubs_data as $row) {
-        if ($is_composite_key) {
-            $composite_keys = [];
-            foreach ($ubs_key as $k) {
-
-                $composite_keys[] = $row[$k];
+    // Process UBS data in batches to optimize memory
+    $ubs_batch_size = 5000;
+    for ($i = 0; $i < count($ubs_data); $i += $ubs_batch_size) {
+        $batch = array_slice($ubs_data, $i, $ubs_batch_size);
+        
+        foreach ($batch as $row) {
+            if ($is_composite_key) {
+                $composite_keys = [];
+                foreach ($ubs_key as $k) {
+                    $composite_keys[] = $row[$k];
+                }
+                $composite_keys = implode('|', $composite_keys);
+                $ubs_map[$composite_keys] = $row;
+            } else {
+                $ubs_map[$row[$ubs_key]] = $row;
             }
-            $composite_keys = implode('|', $composite_keys);
-            $ubs_map[$composite_keys] = $row;
-        } else {
-            $ubs_map[$row[$ubs_key]] = $row;
+        }
+        
+        // Memory optimization between batches
+        if ($i + $ubs_batch_size < count($ubs_data)) {
+            gc_collect_cycles();
         }
     }
 
-    foreach ($remote_data as $row) {
-        $remote_map[$row[$remote_key]] = $row;
+    // Process remote data in batches
+    $remote_batch_size = 5000;
+    for ($i = 0; $i < count($remote_data); $i += $remote_batch_size) {
+        $batch = array_slice($remote_data, $i, $remote_batch_size);
+        
+        foreach ($batch as $row) {
+            $remote_map[$row[$remote_key]] = $row;
+        }
+        
+        // Memory optimization between batches
+        if ($i + $remote_batch_size < count($remote_data)) {
+            gc_collect_cycles();
+        }
     }
 
     $sync = [
@@ -131,30 +230,49 @@ function syncEntity($entity, $ubs_data, $remote_data)
     ];
 
     $all_keys = array_unique(array_merge(array_keys($ubs_map), array_keys($remote_map)));
+    dump("Total unique keys to process: " . count($all_keys));
 
-    foreach ($all_keys as $key) {
-        $ubs = $ubs_map[$key] ?? null;
-        $remote = $remote_map[$key] ?? null;
+    // Process sync logic in batches
+    $sync_batch_size = 1000;
+    for ($i = 0; $i < count($all_keys); $i += $sync_batch_size) {
+        $key_batch = array_slice($all_keys, $i, $sync_batch_size);
+        
+        foreach ($key_batch as $key) {
+            $ubs = $ubs_map[$key] ?? null;
+            $remote = $remote_map[$key] ?? null;
 
-        if ($ubs) {
-            $ubs_time = strtotime($ubs['UPDATED_ON'] ?? '1970-01-01');
-        }
-        if ($remote) {
-            $remote_time = strtotime($remote[$column_updated_at] ?? '1970-01-01');
-        }
+            if ($ubs) {
+                $ubs_time = strtotime($ubs['UPDATED_ON'] ?? '1970-01-01');
+            }
+            if ($remote) {
+                $remote_time = strtotime($remote[$column_updated_at] ?? '1970-01-01');
+            }
 
-        if ($ubs && !$remote) {
-            $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
-        } elseif (!$ubs && $remote) {
-            $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
-        } elseif ($ubs && $remote) {
-            if ($ubs_time > $remote_time) {
+            if ($ubs && !$remote) {
                 $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
-            } elseif ($remote_time > $ubs_time) {
+            } elseif (!$ubs && $remote) {
                 $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
+            } elseif ($ubs && $remote) {
+                if ($ubs_time > $remote_time) {
+                    $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
+                } elseif ($remote_time > $ubs_time) {
+                    $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
+                }
             }
         }
+        
+        // Memory optimization between batches
+        if ($i + $sync_batch_size < count($all_keys)) {
+            gc_collect_cycles();
+            $memoryCurrent = getMemoryUsage();
+            dump("Sync progress: " . round(($i / count($all_keys)) * 100, 2) . "% - Memory: " . $memoryCurrent['memory_usage_mb'] . "MB");
+        }
     }
+
+    // Final memory cleanup
+    $memoryEnd = getMemoryUsage();
+    dump("SyncEntity end - Memory: " . $memoryEnd['memory_usage_mb'] . "MB");
+    dump("Sync results - Remote: " . count($sync['remote_data']) . ", UBS: " . count($sync['ubs_data']));
 
     return $sync;
 }
@@ -407,6 +525,9 @@ function serialize_record($record)
 
 function read_dbf($dbf_file_path)
 {
+    // Increase memory limit for large DBF files
+    increaseMemoryLimit('4G');
+    
     try {
         $table = new XBase\TableReader($dbf_file_path, [
             'encoding' => 'cp1252',
@@ -423,7 +544,14 @@ function read_dbf($dbf_file_path)
             ];
         }
 
+        // Log initial memory usage
+        $memoryStart = getMemoryUsage();
+        dump("DBF read start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
+
         $rows = [];
+        $rowCount = 0;
+        $batchSize = 10000; // Process in batches of 10k rows
+        
         while ($record = $table->nextRecord()) {
             if ($record->isDeleted()) continue;
 
@@ -437,7 +565,19 @@ function read_dbf($dbf_file_path)
             }
 
             $rows[] = $rowData;
+            $rowCount++;
+            
+            // Memory optimization every batchSize rows
+            if ($rowCount % $batchSize === 0) {
+                gc_collect_cycles();
+                $memoryCurrent = getMemoryUsage();
+                dump("DBF read progress: $rowCount rows - Memory: " . $memoryCurrent['memory_usage_mb'] . "MB");
+            }
         }
+
+        // Final memory cleanup
+        $memoryEnd = getMemoryUsage();
+        dump("DBF read end - Total rows: $rowCount - Memory: " . $memoryEnd['memory_usage_mb'] . "MB");
 
         return [
             'structure' => $structure,
