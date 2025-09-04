@@ -6,7 +6,6 @@ require_once dirname(__FILE__) . '/../includes/classes/mysql.class.php';
 require_once dirname(__FILE__) . '/../includes/classes/core.class.php';
 require_once dirname(__FILE__) . '/helper.php';
 require_once dirname(__FILE__) . '/../functions.php';
-require_once dirname(__FILE__) . '/../memory_config.php';
 require_once dirname(__FILE__) . '/../converter.class.php';
 
 
