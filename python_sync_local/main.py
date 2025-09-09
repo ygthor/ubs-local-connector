@@ -1,35 +1,59 @@
 from utils import read_dbf, sync_to_server, test_server_response
-from sync_database import sync_to_database
+from sync_database import create_sync_logs_table, sync_to_database
 import os
+import time
+
 
 def main():
-    test_server_response()
+
+    create_sync_logs_table()
+
+    # test_server_response()
     sync_all()
+
+    # while True:
+    #     # Call your function or logic here
+    #     print("Running task...")
+    #     sync_all()
+    #     # Wait 5 seconds
+    #     print("Waiting ... ... ...")
+    #     time.sleep(30)
+
     # single_sync()
 
+
 def sync_all():
-    directory_arr = ['UBSACC2015', 'UBSSTK2015']
-    dbf_arr = [
-        'arcust',
-        'apvend',
-        'artran',
+    grouped_dbfs = {
+        "UBSACC2015": [
+            "arcust",
+            "apvend",
+           
+            "arpay",
+            "arpost",
+            "gldata",
+            "glbatch",
+            "glpost",
+            
+        ],
+        "UBSSTK2015": [
+            
+            # "icarea",
+            "icitem",
 
-        'icarea'
-        'icitem',
-        'ictran',
-        
+            "artran",
+            "ictran",
 
-        'arpay',
-        'arpost',
-        'gldata',
-        'glbatch',
-        'glpost',
-    ]
+            "arpso",
+            "icpso",
+        ],
+    }
 
-    for directory_name in directory_arr:
-        directory_path = f'C:/{directory_name}/Sample'
-        for dbf_name in dbf_arr:
-            file_name = dbf_name + '.dbf'
+    dbf_subpath=os.getenv("DBF_SUBPATH", "Sample")
+
+    for directory_name, dbf_list in grouped_dbfs.items():
+        directory_path = f"C:/{directory_name}/"+dbf_subpath
+        for dbf_name in dbf_list:
+            file_name = dbf_name + ".dbf"
             full_path = os.path.join(directory_path, file_name)
             try:
                 data = read_dbf(full_path)
@@ -39,9 +63,9 @@ def sync_all():
 
 
 def single_sync():
-    directory_name = 'UBSACC2015'
-    directory_path = f'C:/{directory_name}/Sample'
-    file_name = 'arcust.dbf'
+    directory_name = "UBSACC2015"
+    directory_path = f"C:/{directory_name}/Sample"
+    file_name = "arcust.dbf"
     full_path = os.path.join(directory_path, file_name)
     data = read_dbf(full_path)
     print(data)

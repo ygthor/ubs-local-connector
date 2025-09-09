@@ -2,40 +2,215 @@
 
 class Converter
 {
-    function map($entity)
+    public static $table_cloned_ubs = [
+        'artrans',
+        'artrans_items',
+        'gldata'
+    ];
+
+    static function ubsTable()
+    {
+        $dbf_arr = [
+            'ubs_ubsacc2015_arcust',
+            'ubs_ubsstk2015_arpso', // order
+            'ubs_ubsstk2015_icpso', // order item
+            'ubs_ubsstk2015_artran', // invoice
+            'ubs_ubsstk2015_ictran', // invoice item
+            'ubs_ubsacc2015_gldata', // statement
+
+            // 'ubs_ubsacc2015_apvend',
+            // 'ubs_ubsacc2015_arpay',// => receipt
+            // 'ubs_ubsacc2015_arpost',// => order
+            // 'ubs_ubsacc2015_artran',
+            
+            // 'ubs_ubsacc2015_glbatch',
+            // 'ubs_ubsacc2015_glpost',
+            // 'ubs_ubsacc2015_ictran',
+
+
+            // 'ubs_ubsstk2015_arcust',
+            // 'ubs_ubsstk2015_apvend',
+            // 'ubs_ubsstk2015_icarea',
+            // 'ubs_ubsstk2015_icitem',
+            // 'ubs_ubsstk2015_ictran',
+
+            
+        ];
+        return $dbf_arr;
+    }
+
+
+    static function primaryKey($entity)
     {
         $maps = [
-            'customer' => [
-                // remote => ubs
-                'customer_code'   => 'CUSTNO',
-                'name'            => 'NAME',
-                'company_name'    => 'NAME2',
-                'address1'        => 'ADD1',
-                'address2'        => 'ADD2',
-                'postcode'        => 'POSTCODE',
-                'state'           => 'STATE',
-                'territory'       => 'AREA',
-                'telephone1'      => 'PHONE',
-                'telephone2'      => 'PHONEA',
-                'fax_no'          => 'FAX',
-                'address'         => 'ADD1',
-                'contact_person'  => 'CONTACT',
-                'email'           => 'E_MAIL',
-                'phone'           => 'PHONE',
-                'customer_group'  => 'CT_GROUP',
-                'customer_type'   => 'CUST_TYPE',
-                'segment'         => 'BUSINESS',
-                'payment_type'    => 'TERM',
-                'payment_term'    => 'TERM_IN_M',
-                'max_discount'    => 'PROV_DISC',
-                'lot_type'        => 'TEMP',
-                'avatar_url'      => null,
-                'created_at'      => 'CREATED_ON',
-                'updated_at'      => 'UPDATED_ON',
+            'ubs_ubsacc2015_arcust' => 'CUSTNO',
+            'ubs_ubsacc2015_arpay' => 'CUSTNO',
+            'ubs_ubsacc2015_arpost' => 'ENTRY',
+
+            'ubs_ubsacc2015_gldata' => 'ACCNO',
+            
+
+            'ubs_ubsstk2015_arpso' => 'REFNO',
+            'ubs_ubsstk2015_icpso' => [
+                'REFNO',
+                'ITEMCOUNT'
             ],
-            // Add more: 'product' => [...], 'invoice' => [...]
+
+            'ubs_ubsstk2015_artran' => 'REFNO',
+            'ubs_ubsstk2015_ictran' => [
+                'REFNO',
+                'ITEMCOUNT'
+            ],
+
+            
+
+
+            'customers' => 'customer_code',
+            'orders' => 'reference_no',
+            'order_items' => 'unique_key',
+            'artrans' => 'REFNO',
+            'artrans_items' => 'unique_key',
+            'gldata' => 'ACCNO',
+            
+        ];
+
+        return $maps[$entity] ?? null;
+    }
+    static function columnMap($entity)
+    {
+        $common = [
+            'UPDATED_ON' => 'updated_at',
+            'customers' => 'customer_code',
+        ];
+
+        return $maps[$entity] ?? null;
+    }
+    static function table_map()
+    {
+        $maps = [
+            'ubs_ubsacc2015_arcust' => 'customers',
+            'ubs_ubsstk2015_arpso' => 'orders',
+            'ubs_ubsstk2015_icpso' => 'order_items',
+
+            'ubs_ubsstk2015_artran' => 'artrans',
+            'ubs_ubsstk2015_ictran' => 'artrans_items',
+            'ubs_ubsacc2015_gldata' => 'gldata',
+        ];
+
+        return $maps;
+    }
+    static function table_convert_remote($entity)
+    {
+        $maps = self::table_map();
+        return $maps[$entity] ?? null;
+    }
+
+    static function mapColumns($entity)
+    {
+        $maps = [
+            'customers' => [
+                // UBS => REMOTE
+                'CUSTNO'     => 'customer_code',
+                'NAME'       => 'name',
+                'NAME2'      => 'company_name',
+                'ADD1'       => 'address', // overwritten from 'address1'
+                'ADD2'       => 'address2',
+                'POSTCODE'   => 'postcode',
+                'STATE'      => 'state',
+                'AREA'       => 'territory',
+                'PHONE'      => 'phone', // overwritten from 'telephone1'
+                'PHONEA'     => 'telephone2',
+                'FAX'        => 'fax_no',
+                'CONTACT'    => 'contact_person',
+                'E_MAIL'     => 'email',
+                'CT_GROUP'   => 'customer_group',
+                'CUST_TYPE'  => 'customer_type',
+                'BUSINESS'   => 'segment',
+                'TERM'       => 'payment_type',
+                'TERM_IN_M'  => 'payment_term',
+                'PROV_DISC'  => 'max_discount',
+                'TEMP'       => 'lot_type',
+                'CREATED_ON' => 'created_at',
+                'UPDATED_ON' => 'updated_at',
+            ],
+
+            'orders' => [
+                'TYPE' => 'type',
+                'REFNO'       => 'reference_no', // key was empty
+                'CUSTNO'      => 'customer_code', // link using customer id
+                'NAME' => 'customer_name',
+                'DATE'        => 'order_date',
+                'DESP'        => 'description',
+                'GROSS_BIL'   => 'gross_amount',
+                'TAX1_BIL'    => 'tax1',
+                // 'TAX2_BIL'    => 'tax2',
+                // 'TAX3_BIL'    => 'tax3',
+                'TAX1'    => 'tax1',
+                // 'TAX2'    => 'tax2',
+                // 'TAX3'    => 'tax3',
+                'TAXP1'       => 'tax1_percentage',
+                // 'TAXP2'       => 'tax2_percentage',
+                // 'TAXP3'       => 'tax3_percentage',
+                'TAX'         => 'tax1',
+                'GRAND_BIL'   => 'grand_amount',
+                'GRAND'   => 'grand_amount',
+                'INVGROSS'    => 'net_amount',
+                'DISCOUNT'    => 'discount',
+                'NET'         => 'net_amount',
+                'CREATED_ON' => 'created_at',
+                'PLA_DODATE' => 'order_date',
+                'UPDATED_ON' => 'updated_at',
+
+            ],
+
+            'order_items' => [
+                'TYPE' => 'orders|type',
+                'TRANCODE' => null,
+                'CUSTNO' => 'orders|customer_code',
+                'DATE' => 'orders|order_date',
+                // 'NAME ' => 'orders|customer_name',   
+
+                'REFNO'       => 'reference_no', 
+                'ITEMCOUNT' => 'item_count',
+                'ITEMNO' => 'product_no',
+                'DESP' => 'description',
+                'QTY_BIL' => 'quantity',
+                'PRICE_BIL' => 'unit_price',
+                'UNIT_BIL' => 'unit',
+                'AMT1_BIL' => 'amount',
+                'AMT_BIL' => 'amount',
+                'QTY' => 'quantity',
+                'PRICE' => 'unit_price',
+                'UNIT' => 'unit',
+                'AMT1' => 'amount',
+                'AMT' => 'amount',
+                'QTY1' => 'quantity',
+                     
+                'TRDATETIME' => 'created_at',
+                'CREATED_ON' => 'created_at',
+                'UPDATED_ON' => 'updated_at',
+
+            ],
+
+
+
+            // auto map if identical
+
         ];
 
         return $maps[$entity] ?? [];
+    }
+
+
+
+
+    static function mapUpdatedAtField($remote_table){
+        $maps = [
+            'artrans' => 'UPDATED_ON',
+            'artrans_items' => 'UPDATED_ON',
+            'gldata' => 'UPDATED_ON',
+        ];
+
+        return $maps[$remote_table] ?? 'updated_at'; // default
     }
 }

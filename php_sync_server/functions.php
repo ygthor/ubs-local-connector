@@ -1,81 +1,60 @@
 <?php
 
-// ubs table => kanesan table
-function tableMapping()
+// Memory management functions
+function increaseMemoryLimit($limit = '512M')
 {
-    $TABLE_MAPPING = [
-        'ubs_ubsacc2015_arcust' => 'customers', // Customer master data (Account Receivable)
-        'ubs_ubsacc2015_apvend' => 'vendor', // Vendor master data (Account Payable)
-
-        'ubs_ubsacc2015_arpost' => 'vendor', // Customer invoice posting
-        'ubs_ubsacc2015_artran' => 'vendor', // Customer transaction details
-
-        'ubs_ubsacc2015_glbatch' => 'vendor', // GL batch header
-        'ubs_ubsacc2015_gldata' => 'vendor', // General Ledger transactions
-
-        'ubs_ubsacc2015_glpost' => 'vendor', // Posted General Ledger entries
-        'ubs_ubsacc2015_ictran' => 'vendor', // Inventory transactions
-
-        'ubs_ubsstk2015_apvend' => 'vendor',
-        'ubs_ubsstk2015_arcust' => 'vendor',
-        'ubs_ubsstk2015_artran' => 'vendor',
-        'ubs_ubsstk2015_ictran' => 'vendor',
-    ];
-    return $TABLE_MAPPING;
-}
-
-// Memory management helper functions
-function increaseMemoryLimit($limit = '1G')
-{
-    $currentLimit = ini_get('memory_limit');
-    $currentBytes = return_bytes($currentLimit);
-    $newBytes = return_bytes($limit);
-    
-    if ($newBytes > $currentBytes) {
-        ini_set('memory_limit', $limit);
-        return true;
-    }
-    return false;
-}
-
-function return_bytes($val)
-{
-    $val = trim($val);
-    $last = strtolower($val[strlen($val)-1]);
-    $val = (int)$val;
-    switch($last) {
-        case 'g': $val *= 1024;
-        case 'm': $val *= 1024;
-        case 'k': $val *= 1024;
-    }
-    return $val;
+    ini_set('memory_limit', $limit);
+    return ini_get('memory_limit');
 }
 
 function getMemoryUsage()
 {
     return [
+        'memory_limit' => ini_get('memory_limit'),
         'memory_usage' => memory_get_usage(true),
         'memory_peak' => memory_get_peak_usage(true),
-        'memory_limit' => ini_get('memory_limit')
+        'memory_usage_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        'memory_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2)
     ];
 }
 
-function logMemoryUsage($context = '')
+function optimizeMemoryUsage()
 {
-    $usage = getMemoryUsage();
-    error_log("Memory Usage [$context]: " . 
-              "Current: " . formatBytes($usage['memory_usage']) . 
-              ", Peak: " . formatBytes($usage['peak_usage']) . 
-              ", Limit: " . $usage['memory_limit']);
+    // Force garbage collection
+    gc_collect_cycles();
+    
+    // Clear any cached data
+    if (function_exists('opcache_reset')) {
+        opcache_reset();
+    }
+    
+    return getMemoryUsage();
 }
 
-function formatBytes($bytes, $precision = 2)
+function batchProcessData($data, $batchSize = 1000, $callback)
 {
-    $units = array('B', 'KB', 'MB', 'GB', 'TB');
-    for ($i = 0; $bytes > 1024 && $i < count($units) - 1; $i++) {
-        $bytes /= 1024;
+    $total = count($data);
+    $processed = 0;
+    $results = [];
+    
+    for ($i = 0; $i < $total; $i += $batchSize) {
+        $batch = array_slice($data, $i, $batchSize);
+        $batchResults = $callback($batch);
+        $results = array_merge($results, $batchResults);
+        
+        $processed += count($batch);
+        
+        // Memory optimization between batches
+        if ($i + $batchSize < $total) {
+            gc_collect_cycles();
+        }
+        
+        // Log progress
+        $percentage = round(($processed / $total) * 100, 2);
+        dump("Processed: $processed/$total ($percentage%) - Memory: " . getMemoryUsage()['memory_usage_mb'] . "MB");
     }
-    return round($bytes, $precision) . ' ' . $units[$i];
+    
+    return $results;
 }
 
 function insertSyncLog()
@@ -85,7 +64,6 @@ function insertSyncLog()
         'synced_at' => timestamp(),
     ]);
 }
-
 function lastSyncAt()
 {
     $db = new mysql();
@@ -93,303 +71,534 @@ function lastSyncAt()
     return $data ? $data['synced_at'] : null;
 }
 
-function fetchServerData($table, $updatedAfter = null, $bearerToken = null, $chunkSize = 1000)
+function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
 {
-    // Increase memory limit for large data operations
-    increaseMemoryLimit('2G');
+    // Increase memory limit for large data fetching
+    increaseMemoryLimit('4G');
     
-    $apiUrl = ENV::API_URL . '/api/data_sync';
-    $TABLE_MAPPING = tableMapping();
-    $alias_table = $TABLE_MAPPING[$table];
+    $db = new mysql;
+    $db->connect_remote();
 
-    $postData = [
-        'table' => $alias_table,
-        'chunk_size' => $chunkSize, // Request data in chunks
-    ];
+    $alias_table = Converter::table_convert_remote($table);
+    $column_updated_at = Converter::mapUpdatedAtField($alias_table);
 
-    if ($updatedAfter) {
-        $postData['updated_after'] = $updatedAfter;
-    }
-
-    $ch = curl_init($apiUrl);
-
-    $headers = [
-        'Content-Type: application/json',
-    ];
-
-    if ($bearerToken) {
-        $headers[] = 'Authorization: Bearer ' . $bearerToken;
-    }
-
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($postData));
-    curl_setopt($ch, CURLOPT_TIMEOUT, 300); // 5 minutes timeout
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 60); // 1 minute connection timeout
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-    if (curl_errno($ch)) {
-        throw new Exception('Curl error: ' . curl_error($ch));
-    }
-
-    curl_close($ch);
-
-    if ($httpCode !== 200) {
-        throw new Exception("API returned HTTP $httpCode: $response");
-    }
-
-    $data = json_decode($response, true);
+    $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
     
-    // Log memory usage after API call
-    logMemoryUsage("fetchServerData_$table");
+    // Log memory usage before fetching
+    $memoryBefore = getMemoryUsage();
+    dump("Memory before fetch: " . $memoryBefore['memory_usage_mb'] . "MB");
+    
+    $data = $db->get($sql);
+    
+    // Log memory usage after fetching
+    $memoryAfter = getMemoryUsage();
+    dump("Memory after fetch: " . $memoryAfter['memory_usage_mb'] . "MB");
+    dump("Data rows fetched: " . count($data));
     
     return $data;
 }
 
-function convert($dataRow, $map, $direction = 'to_remote')
+
+function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 {
     $converted = [];
 
-    foreach ($map as $remote => $ubs) {
+    $map = Converter::mapColumns($remote_table_name);
+
+    if ($map == []) {
+        return $dataRow; // no need convert
+    }
+
+
+
+
+    foreach ($map as $ubs => $remote) {
         if ($direction === 'to_remote') {
             $converted[$remote] = $ubs ? ($dataRow[$ubs] ?? null) : null;
         } else {
             if ($ubs) {
-                $converted[$ubs] = $dataRow[$remote] ?? null;
+                $converted[$ubs] = $dataRow[$remote] ?? $remote;
             }
         }
     }
 
+    if ($direction == 'to_remote') {
+        foreach ($converted as $key => $val) {
+            $check_table_link = strpos($key, '|');
+            if ($check_table_link !== false || empty($key)) {
+                unset($converted[$key]);
+            }
+        }
+    }
+
+    if ($direction == 'to_ubs') {
+        $db = new mysql;
+        $db->connect_remote();
+        foreach ($converted as $key => $val) {
+            $check_table_link = strpos($val, '|');
+            if ($check_table_link !== false) {
+                $explode = explode('|', $val);
+                $table = $explode[0];
+                $field = $explode[1];
+
+                if ($remote_table_name == 'order_items') {
+                    $id = $dataRow['order_id'];
+                }
+
+                $sql = "SELECT $field FROM $table WHERE id='$id'";
+                $col = $db->first($sql);
+
+                $converted[$key] = $col[$field];
+            }
+        }
+    }
+    // dd($converted);
     return $converted;
 }
 
-// Enhanced syncEntity with memory optimization
-function syncEntity($entity, $ubs_data, $remote_data, $chunkSize = 500)
+
+
+
+
+function syncEntity($entity, $ubs_data, $remote_data)
 {
-    // Increase memory limit for sync operations
-    increaseMemoryLimit('2G');
+    // Increase memory limit for large sync operations
+    increaseMemoryLimit('4G');
     
-    $converter = new Converter();
-    $map = $converter->map($entity);
+    $remote_table_name = Converter::table_convert_remote($entity);
+    $remote_key = Converter::primaryKey($remote_table_name);
+    $ubs_key = Converter::primaryKey($entity);
+    $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
 
-    $ubs_key = $map['customer_code'];  // or use dynamic key map config
-    $remote_key = 'customer_code';
+    $ubs_map = [];
+    $remote_map = [];
 
-    $sync = [
-        'to_insert_remote' => [],
-        'to_update_remote' => [],
-        'to_insert_ubs' => [],
-        'to_update_ubs' => [],
-    ];
+    $is_composite_key = is_array($ubs_key);
 
-    // Process data in chunks to avoid memory issues
-    $ubs_chunks = array_chunk($ubs_data, $chunkSize);
-    $remote_chunks = array_chunk($remote_data, $chunkSize);
-    
-    foreach ($ubs_chunks as $ubs_chunk) {
-        $ubs_map = [];
-        foreach ($ubs_chunk as $row) {
-            $ubs_map[$row[$ubs_key]] = $row;
+    // Log initial memory usage
+    $memoryStart = getMemoryUsage();
+    dump("SyncEntity start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
+    dump("UBS data count: " . count($ubs_data));
+    dump("Remote data count: " . count($remote_data));
+
+    if ($remote_table_name == 'artrans') {
+        // dd($is_composite_key);
+    }
+
+    // Process UBS data in batches to optimize memory
+    $ubs_batch_size = 5000;
+    for ($i = 0; $i < count($ubs_data); $i += $ubs_batch_size) {
+        $batch = array_slice($ubs_data, $i, $ubs_batch_size);
+        
+        foreach ($batch as $row) {
+            if ($is_composite_key) {
+                $composite_keys = [];
+                foreach ($ubs_key as $k) {
+                    $composite_keys[] = $row[$k];
+                }
+                $composite_keys = implode('|', $composite_keys);
+                $ubs_map[$composite_keys] = $row;
+            } else {
+                $ubs_map[$row[$ubs_key]] = $row;
+            }
         }
         
-        foreach ($remote_chunks as $remote_chunk) {
-            $remote_map = [];
-            foreach ($remote_chunk as $row) {
-                $remote_map[$row[$remote_key]] = $row;
-            }
-            
-            // Process this chunk
-            $chunk_sync = processChunk($ubs_map, $remote_map, $map, $ubs_key, $remote_key);
-            
-            // Merge results
-            $sync['to_insert_remote'] = array_merge($sync['to_insert_remote'], $chunk_sync['to_insert_remote']);
-            $sync['to_update_remote'] = array_merge($sync['to_update_remote'], $chunk_sync['to_update_remote']);
-            $sync['to_insert_ubs'] = array_merge($sync['to_insert_ubs'], $chunk_sync['to_insert_ubs']);
-            $sync['to_update_ubs'] = array_merge($sync['to_update_ubs'], $chunk_sync['to_update_ubs']);
-            
-            // Clear chunk maps to free memory
-            unset($ubs_map, $remote_map, $chunk_sync);
-            
-            // Force garbage collection
-            if (function_exists('gc_collect_cycles')) {
-                gc_collect_cycles();
-            }
+        // Memory optimization between batches
+        if ($i + $ubs_batch_size < count($ubs_data)) {
+            gc_collect_cycles();
         }
     }
-    
-    logMemoryUsage("syncEntity_$entity");
-    return $sync;
-}
 
-// Helper function to process data chunks
-function processChunk($ubs_map, $remote_map, $map, $ubs_key, $remote_key)
-{
+    // Process remote data in batches
+    $remote_batch_size = 5000;
+    for ($i = 0; $i < count($remote_data); $i += $remote_batch_size) {
+        $batch = array_slice($remote_data, $i, $remote_batch_size);
+        
+        foreach ($batch as $row) {
+            $remote_map[$row[$remote_key]] = $row;
+        }
+        
+        // Memory optimization between batches
+        if ($i + $remote_batch_size < count($remote_data)) {
+            gc_collect_cycles();
+        }
+    }
+
     $sync = [
-        'to_insert_remote' => [],
-        'to_update_remote' => [],
-        'to_insert_ubs' => [],
-        'to_update_ubs' => [],
+        'remote_data' => [],
+        'ubs_data' => [],
     ];
 
     $all_keys = array_unique(array_merge(array_keys($ubs_map), array_keys($remote_map)));
+    dump("Total unique keys to process: " . count($all_keys));
 
-    foreach ($all_keys as $key) {
-        $ubs = $ubs_map[$key] ?? null;
-        $remote = $remote_map[$key] ?? null;
+    // Process sync logic in batches
+    $sync_batch_size = 1000;
+    for ($i = 0; $i < count($all_keys); $i += $sync_batch_size) {
+        $key_batch = array_slice($all_keys, $i, $sync_batch_size);
+        
+        foreach ($key_batch as $key) {
+            $ubs = $ubs_map[$key] ?? null;
+            $remote = $remote_map[$key] ?? null;
 
-        $ubs_time = strtotime($ubs[$map['updated_at']] ?? '1970-01-01');
-        $remote_time = strtotime($remote['updated_at'] ?? '1970-01-01');
+            if ($ubs) {
+                $ubs_time = strtotime($ubs['UPDATED_ON'] ?? '1970-01-01');
+            }
+            if ($remote) {
+                $remote_time = strtotime($remote[$column_updated_at] ?? '1970-01-01');
+            }
 
-        if ($ubs && !$remote) {
-            $sync['to_insert_remote'][] = convert($ubs, $map, 'to_remote');
-        } elseif (!$ubs && $remote) {
-            $sync['to_insert_ubs'][] = convert($remote, $map, 'to_ubs');
-        } elseif ($ubs && $remote) {
-            if ($ubs_time > $remote_time) {
-                $sync['to_update_remote'][] = convert($ubs, $map, 'to_remote');
-            } elseif ($remote_time > $ubs_time) {
-                $sync['to_update_ubs'][] = convert($remote, $map, 'to_ubs');
+            if ($ubs && !$remote) {
+                $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
+            } elseif (!$ubs && $remote) {
+                $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
+            } elseif ($ubs && $remote) {
+                if ($ubs_time > $remote_time) {
+                    $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
+                } elseif ($remote_time > $ubs_time) {
+                    $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
+                }
             }
         }
-    }
-
-    return $sync;
-}
-
-// Stream-based sync for very large datasets
-function streamSyncEntity($entity, $ubs_data, $remote_data, $chunkSize = 100)
-{
-    increaseMemoryLimit('2G');
-    
-    $converter = new Converter();
-    $map = $converter->map($entity);
-
-    $ubs_key = $map['customer_code'];
-    $remote_key = 'customer_code';
-
-    $sync = [
-        'to_insert_remote' => [],
-        'to_update_remote' => [],
-        'to_insert_ubs' => [],
-        'to_update_ubs' => [],
-    ];
-
-    // Process UBS data in small chunks
-    $ubs_iterator = new ArrayIterator($ubs_data);
-    $ubs_iterator->rewind();
-    
-    while ($ubs_iterator->valid()) {
-        $ubs_chunk = [];
-        $count = 0;
         
-        // Build small chunk
-        while ($ubs_iterator->valid() && $count < $chunkSize) {
-            $ubs_chunk[] = $ubs_iterator->current();
-            $ubs_iterator->next();
-            $count++;
-        }
-        
-        // Process this chunk against remote data
-        $chunk_sync = processChunkAgainstRemote($ubs_chunk, $remote_data, $map, $ubs_key, $remote_key);
-        
-        // Merge results
-        $sync['to_insert_remote'] = array_merge($sync['to_insert_remote'], $chunk_sync['to_insert_remote']);
-        $sync['to_update_remote'] = array_merge($sync['to_update_remote'], $chunk_sync['to_update_remote']);
-        $sync['to_insert_ubs'] = array_merge($sync['to_insert_ubs'], $chunk_sync['to_insert_ubs']);
-        $sync['to_update_ubs'] = array_merge($sync['to_update_ubs'], $chunk_sync['to_update_ubs']);
-        
-        // Clear chunk to free memory
-        unset($ubs_chunk, $chunk_sync);
-        
-        // Force garbage collection
-        if (function_exists('gc_collect_cycles')) {
+        // Memory optimization between batches
+        if ($i + $sync_batch_size < count($all_keys)) {
             gc_collect_cycles();
-        }
-        
-        logMemoryUsage("streamSyncEntity_chunk_$entity");
-    }
-    
-    return $sync;
-}
-
-// Process chunk against remote data
-function processChunkAgainstRemote($ubs_chunk, $remote_data, $map, $ubs_key, $remote_key)
-{
-    $sync = [
-        'to_insert_remote' => [],
-        'to_update_remote' => [],
-        'to_insert_ubs' => [],
-        'to_update_ubs' => [],
-    ];
-
-    foreach ($ubs_chunk as $ubs_row) {
-        $key = $ubs_row[$ubs_key];
-        
-        // Find matching remote row
-        $remote_row = null;
-        foreach ($remote_data as $remote) {
-            if ($remote[$remote_key] === $key) {
-                $remote_row = $remote;
-                break;
-            }
-        }
-        
-        if (!$remote_row) {
-            $sync['to_insert_remote'][] = convert($ubs_row, $map, 'to_remote');
-        } else {
-            $ubs_time = strtotime($ubs_row[$map['updated_at']] ?? '1970-01-01');
-            $remote_time = strtotime($remote_row['updated_at'] ?? '1970-01-01');
-            
-            if ($ubs_time > $remote_time) {
-                $sync['to_update_remote'][] = convert($ubs_row, $map, 'to_remote');
-            }
+            $memoryCurrent = getMemoryUsage();
+            dump("Sync progress: " . round(($i / count($all_keys)) * 100, 2) . "% - Memory: " . $memoryCurrent['memory_usage_mb'] . "MB");
         }
     }
+
+    // Final memory cleanup
+    $memoryEnd = getMemoryUsage();
+    dump("SyncEntity end - Memory: " . $memoryEnd['memory_usage_mb'] . "MB");
+    dump("Sync results - Remote: " . count($sync['remote_data']) . ", UBS: " . count($sync['ubs_data']));
 
     return $sync;
 }
 
-function upsertUbs($path, $record)
-{
-    $path = '/path/to/AR_CUST.DBF';
-    $table = new Table($path);
-    $table->openWrite();
 
-    $keyField = 'CUSTNO';
+function upsertUbs($table, $record)
+{
+
+    $keyField = Converter::primaryKey($table);
+
+    $arr = parseUbsTable($table);
+    $table = $arr['table'];
+    $directory = strtoupper($arr['database']);
+
+    // if(in_array($table,['artran'])) return;
+
+    $path = "C:/$directory/" . ENV::DBF_SUBPATH . "/{$table}.dbf";
+
+
+    $editor = new \XBase\TableEditor($path, [
+        'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE, // safer mode
+    ]);
+
+    // Create a column map for easy access
+    $columns = $editor->getColumns();
+    $columnMap = [];
+    foreach ($columns as $column) {
+        $columnMap[$column->getName()] = $column;
+    }
+
     $found = false;
 
-    while ($row = $table->nextRecord()) {
-        if (trim($row->get($keyField)) === trim($record[$keyField])) {
-            // UPDATE
-            foreach ($record as $field => $value) {
-                $row->set($field, $value);
+    $BASE_RECORD = null;
+    // UPDATE IF EXISTS
+    while ($row = $editor->nextRecord()) {
+
+        if ($BASE_RECORD == null) {
+            // if($row->get('TYPE') == 'SO' && $row->get('REFNO') == 'SO00003' ){
+            $BASE_RECORD = $row->getData();
+            $BASE_RECORD = array_change_key_case($BASE_RECORD, CASE_UPPER);
+            // dd($BASE_RECORD);
+            // }
+
+        }
+
+        if (is_array($keyField)) {
+            $composite_keys = [];
+            $record_composite_keys = [];
+            foreach ($keyField as $k) {
+                $composite_keys[] = trim($row->get($k));
+                $record_composite_keys[] = trim($record[$k]);
             }
-            $row->save();
+            $keyValue = implode('|', $composite_keys);
+            $recordKeyValue = implode('|', $record_composite_keys);
+        } else {
+            $keyValue = trim($row->get($keyField));
+            $recordKeyValue = trim($record[$keyField]);
+        }
+
+        if ($keyValue === $recordKeyValue) {
+            dump("update: $keyValue");
+            // dump("$keyValue === $recordKeyValue");
+            foreach ($record as $field => $value) {
+                if (in_array($field, ['artrans_id'])) {
+                    continue;
+                }
+                // Use the column map to get the column object directly
+                // need lowerr case
+                $column = $columnMap[strtolower($field)] ?? null;
+                if($column == null){
+                    continue;
+                }
+                $fieldType = $column->getType();
+                
+                // Handle boolean fields
+                if ($fieldType === 'L') {
+                    $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
+                }
+
+                // Handle date fields
+                if ($fieldType === 'D') {
+                    if (empty($value) || $value === '0000-00-00') {
+                        // Set empty date to 8 spaces
+                        $value = "        ";
+                    } else {
+                        // Ensure a valid timestamp can be created from the value
+                        $timestamp = strtotime($value);
+                        if ($timestamp !== false) {
+                            $value = date('Ymd', $timestamp);
+                        } else {
+                            // Handle invalid date strings gracefully. 
+                            // You might want to log this or set it to an empty date.
+                            dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to empty date.");
+                            $value = "        ";
+                        }
+                    }
+                }
+
+
+
+                // if (in_array($field, ['DATE', 'PLA_DODATE'])) {
+                //     $value = date('Ymd', strtotime($value));
+                // }
+              
+
+
+
+                // Check if the column is a boolean type
+                // $isBooleanFields = [
+                //     'URGENCY',
+                //     'TAXINCL',
+                //     'IMPSVC',
+                //     'FTP',
+                //     'DISPATCHED',
+                //     'WGST',
+                //     'APPLYSC',
+                //     'EDGSTAMT',
+                //     'RETEX',
+                //     'SB',
+                //     'IMPSVCT',
+                //     'AUTOMOBI',
+                //     'MODERNTRA',
+                //     'EINVSENT'
+                // ];
+
+
+                // if (in_array($field, $isBooleanFields)) {
+                //     $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
+                // }
+
+                // dump("$field => $value");
+                try {
+                    $row->set($field, $value);
+                } catch (\Throwable $e) {
+                    dump($field);
+                }
+            }
+
+            $editor->writeRecord();
+            $editor->save();
+            $editor->close();
+
             $found = true;
             break;
         }
     }
 
-    if (!$found) {
-        // INSERT
-        $table->append($record);
-    }
+    // INSERT IF NOT FOUND
+    $structure = [];
+    foreach ($editor->getColumns() as $column) {
+        $structure[strtoupper($column->getName())] = $column->getType();
+    };
 
-    $table->close();
+    if (!$found) {
+        dump('insert');
+        $newRow = $editor->appendRecord();
+
+        $new_record = $BASE_RECORD;
+
+
+        foreach ($record as $field => $value) {
+            $new_record[$field] = $value;
+        }
+        // dump($new_record);
+        foreach ($new_record as $field => $value) {
+            if(!isset($structure[$field])) continue;
+            try {
+                if ($value === null) $value = "";
+
+                if ($structure[$field] == 'L' && empty($value)) {
+                    $value = false;
+                }
+                if ($structure[$field] === 'D') {
+                    // Normalize to 8-character DBF format
+                    $value = date('Ymd', strtotime($value));
+                }
+
+                $newRow->set($field, $value);
+            } catch (\Throwable $e) {
+                var_dump($fieldType);
+                var_dump($value);
+                dump("$field => $value caused problem");
+                dd($e->getMessage());
+            }
+        }
+        $editor->writeRecord(); // commit the new record
+        $editor->save()->close();
+    }
 }
 
-// Configuration function for memory optimization
-function getSyncConfig()
+
+function upsertRemote($table, $record)
 {
-    return [
-        'memory_limit' => '2G',
-        'chunk_size' => 500,
-        'stream_chunk_size' => 100,
-        'enable_gc' => true,
-        'log_memory' => true,
-        'timeout' => 300
-    ];
+    $Core = Core::getInstance();
+    $remote_table_name = Converter::table_convert_remote($table);
+    dump($remote_table_name);
+    $primary_key = Converter::primaryKey($remote_table_name);
+
+    $db = new mysql;
+    $db->connect_remote();
+
+    $table_convert = ['orders'];
+
+    if (in_array($remote_table_name, $table_convert)) {
+        $customer_lists = $Core->remote_customer_lists;
+        $customer_id = $customer_lists[$record['customer_code']] ?? null;
+        $record['customer_id'] = $customer_id;
+    }
+
+    if ($remote_table_name == 'order_items') {
+        $order_lists = $Core->remote_order_lists;
+        $record[$primary_key] = $record['reference_no'] . '|' . $record['item_count'];
+        $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
+    }
+
+    if ($remote_table_name == 'artrans_items') {
+        $remote_artrans_lists = $Core->remote_artrans_lists;
+        $record[$primary_key] = $record['REFNO'] . '|' . $record['ITEMCOUNT'];
+        $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
+    }
+
+    if ($remote_table_name == 'artrans') {
+        // dd($record);
+        // dd($primary_key);
+    }
+
+    if (count($record) > 0) {
+        if ($remote_table_name == 'artrans_items') {
+            // dd($primary_key);
+            // dd($record);
+        }
+
+        $db->update_or_insert($remote_table_name, [$primary_key => $record[$primary_key]], $record);
+    }
+}
+
+
+
+
+function serialize_record($record)
+{
+    foreach ($record as $key => $value) {
+        if ($value instanceof DateTime) {
+            $record[$key] = $value->format('Y-m-d');
+        }
+    }
+    return $record;
+}
+
+
+function read_dbf($dbf_file_path)
+{
+    // Increase memory limit for large DBF files
+    increaseMemoryLimit('4G');
+    
+    try {
+        $table = new XBase\TableReader($dbf_file_path, [
+            'encoding' => 'cp1252',
+            // optionally specify columns: 'columns' => ['CUSTNO', 'NAME', ...]
+        ]);
+
+        $structure = [];
+        foreach ($table->getColumns() as $column) {
+            $structure[] = [
+                'name' => $column->getName(),
+                'type' => $column->getType(),
+                'size' => $column->getLength(),
+                'decs' => $column->getDecimalCount(),
+            ];
+        }
+
+        // Log initial memory usage
+        $memoryStart = getMemoryUsage();
+        dump("DBF read start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
+
+        $rows = [];
+        $rowCount = 0;
+        $batchSize = 10000; // Process in batches of 10k rows
+        
+        while ($record = $table->nextRecord()) {
+            if ($record->isDeleted()) continue;
+
+            $rowData = [];
+            foreach ($structure as $field) {
+                $name = $field['name'];
+                $value = $record->$name; // access as object property
+                $rowData[$name] = ($value instanceof \DateTimeInterface)
+                    ? $value->format('Y-m-d')
+                    : trim((string)$value);
+            }
+
+            $rows[] = $rowData;
+            $rowCount++;
+            
+            // Memory optimization every batchSize rows
+            if ($rowCount % $batchSize === 0) {
+                gc_collect_cycles();
+                $memoryCurrent = getMemoryUsage();
+                dump("DBF read progress: $rowCount rows - Memory: " . $memoryCurrent['memory_usage_mb'] . "MB");
+            }
+        }
+
+        // Final memory cleanup
+        $memoryEnd = getMemoryUsage();
+        dump("DBF read end - Total rows: $rowCount - Memory: " . $memoryEnd['memory_usage_mb'] . "MB");
+
+        return [
+            'structure' => $structure,
+            'rows' => $rows,
+        ];
+    } catch (Exception $e) {
+        throw new Exception("Failed to read DBF file: " . $e->getMessage());
+    }
+}
+
+function parseUbsTable($input)
+{
+    // Expecting format: ubs_[database]_[table]
+    $parts = explode('_', $input, 3);
+
+    if (count($parts) === 3 && $parts[0] === 'ubs') {
+        return [
+            'database' => $parts[1],
+            'table' => $parts[2]
+        ];
+    }
+
+    return null; // Invalid format
 }

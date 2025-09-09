@@ -1,4 +1,7 @@
 <?php
+
+use XBase\DataConverter\Field\DBase7\TimestampConverter;
+
 include(__DIR__ . '/bootstrap/app.php');
 
 $db = new mysql();
@@ -6,24 +9,48 @@ $db = new mysql();
 
 // insertSyncLog();
 $last_synced_at = lastSyncAt();
+$last_synced_at = "2000-08-01 00:20:00" ; // For testing purpose, set to a fixed date
 
-$last_synced_at = "2025-06-01 00:00:00"; // For testing purpose, set to a fixed date
+$ubsTables = Converter::ubsTable();
+
+foreach($ubsTables as $ubs_table){
+    $sql = "
+        SELECT * FROM `$ubs_table` 
+        WHERE UPDATED_ON > '$last_synced_at'
+    ";
+    $ubs_data = $db->get($sql);
+    $remote_data = fetchServerData($ubs_table, $last_synced_at);
+
+    $comparedData = syncEntity($ubs_table,$ubs_data, $remote_data);
+
+    $remote_data = $comparedData['remote_data'];
+    $ubs_data = $comparedData['ubs_data'];
+    
+    // dump($comparedData);
+    // $to_insert_ubs = [];
+    // $to_update_ubs = [];
 
 
-$sql = "
-    SELECT * FROM `ubs_ubsacc2015_arcust` 
-    WHERE UPDATED_ON > '$last_synced_at'
-";
-$ubs_data = $db->get($sql);
+    foreach($remote_data as $arr){
+        upsertRemote($ubs_table,$arr,);
+    }
+    foreach($ubs_data as $arr){
+        upsertUbs($ubs_table,$arr);
+    }
 
 
-$remote_data = fetchServerData('ubs_ubsacc2015_arcust', $last_synced_at);
+    $table_trigger_reset = ['customer','orders'];
+    $remote_table_name = Converter::table_convert_remote($ubs_table);
+    if(in_array($remote_table_name,$table_trigger_reset)){
+        $Core = Core::getInstance();
+        $Core->initRemoteData();
+    }
+}
 
-$d = syncEntity('customer',$ubs_data, $remote_data);
-dd($d);
+
+$db->insert('sync_logs',[
+    'synced_at' => date('Y-m-d H:i:s')
+]);
 
 
-
-
-
-dd($data);
+dd('SUCCESS');

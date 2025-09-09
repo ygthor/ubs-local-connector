@@ -4,15 +4,21 @@ if (!isset($_SESSION)) session_start();
 class mysql
 {
 	protected $con;
-	public function __construct($db_name = null, $debug = false)
+	public function __construct()
 	{
-		$this->connect($db_name);
+		$this->connect();
 	}
 
-	function connect($db_name = null)
+	function connect()
 	{
 		$this->con = mysqli_connect(ENV::DB_HOST, ENV::DB_USERNAME, ENV::DB_PASSWORD);
 		mysqli_select_db($this->con, ENV::DB_NAME);
+	}
+
+	function connect_remote()
+	{
+		$this->con = mysqli_connect(ENV::REMOTE_DB_HOST, ENV::REMOTE_DB_USERNAME, ENV::REMOTE_DB_PASSWORD);
+		mysqli_select_db($this->con, ENV::REMOTE_DB_NAME);
 	}
 
 	function query($query)
