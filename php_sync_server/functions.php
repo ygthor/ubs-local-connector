@@ -1,5 +1,35 @@
 <?php
 
+// Configuration and setup functions
+function initializeSyncEnvironment()
+{
+    // Set memory limit for large data processing
+    ini_set('memory_limit', '4G');
+    
+    // Enable garbage collection
+    ini_set('zend.enable_gc', 1);
+    
+    // Set execution time limit (0 = unlimited)
+    set_time_limit(0);
+    
+    // Disable output buffering for real-time progress display
+    if (ob_get_level()) {
+        ob_end_flush();
+    }
+    
+    // Set error reporting
+    error_reporting(E_ERROR | E_WARNING | E_PARSE);
+    ini_set('display_errors', 1);
+    
+    // Log configuration
+    if (function_exists('dump')) {
+        dump("🚀 Sync environment initialized:");
+        dump("- Memory limit: " . ini_get('memory_limit'));
+        dump("- Execution time limit: " . ini_get('max_execution_time'));
+        dump("- Garbage collection: " . (ini_get('zend.enable_gc') ? 'Enabled' : 'Disabled'));
+    }
+}
+
 // Memory management functions
 function increaseMemoryLimit($limit = '512M')
 {
@@ -18,6 +48,125 @@ function getMemoryUsage()
     ];
 }
 
+// Enhanced progress display system
+class ProgressDisplay
+{
+    private static $startTime;
+    private static $lastUpdate = 0;
+    private static $updateInterval = 1; // Update every 1 second
+    
+    public static function start($message = "Starting process...")
+    {
+        self::$startTime = microtime(true);
+        self::display($message, 0, 0, true);
+    }
+    
+    public static function display($message, $current = 0, $total = 0, $force = false)
+    {
+        $now = microtime(true);
+        
+        // Only update if forced or enough time has passed
+        if (!$force && ($now - self::$lastUpdate) < self::$updateInterval) {
+            return;
+        }
+        
+        self::$lastUpdate = $now;
+        
+        $memory = getMemoryUsage();
+        $elapsed = $now - self::$startTime;
+        
+        // Clear line and move cursor to beginning
+        echo "\r\033[K";
+        
+        if ($total > 0) {
+            $percentage = round(($current / $total) * 100, 1);
+            $barLength = 30;
+            $filledLength = round(($percentage / 100) * $barLength);
+            $bar = str_repeat('█', $filledLength) . str_repeat('░', $barLength - $filledLength);
+            
+            $eta = self::calculateETA($current, $total, $elapsed);
+            
+            echo sprintf(
+                "[%s] %s (%d/%d) %s%% | Memory: %sMB | Time: %s | ETA: %s",
+                date('H:i:s'),
+                $bar,
+                $current,
+                $total,
+                $percentage,
+                $memory['memory_usage_mb'],
+                self::formatTime($elapsed),
+                $eta
+            );
+        } else {
+            echo sprintf(
+                "[%s] %s | Memory: %sMB | Time: %s",
+                date('H:i:s'),
+                $message,
+                $memory['memory_usage_mb'],
+                self::formatTime($elapsed)
+            );
+        }
+        
+        // Flush output to ensure immediate display
+        flush();
+    }
+    
+    public static function complete($message = "Process completed!")
+    {
+        $elapsed = microtime(true) - self::$startTime;
+        $memory = getMemoryUsage();
+        
+        echo "\n";
+        echo "✅ " . $message . "\n";
+        echo "📊 Total Time: " . self::formatTime($elapsed) . "\n";
+        echo "💾 Peak Memory: " . $memory['memory_peak_mb'] . "MB\n";
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+    }
+    
+    public static function error($message)
+    {
+        echo "\n❌ ERROR: " . $message . "\n";
+    }
+    
+    public static function warning($message)
+    {
+        echo "\n⚠️  WARNING: " . $message . "\n";
+    }
+    
+    public static function info($message)
+    {
+        echo "\nℹ️  INFO: " . $message . "\n";
+    }
+    
+    private static function calculateETA($current, $total, $elapsed)
+    {
+        if ($current <= 0 || $elapsed <= 0) {
+            return "Calculating...";
+        }
+        
+        $rate = $current / $elapsed;
+        $remaining = $total - $current;
+        $eta = $remaining / $rate;
+        
+        return self::formatTime($eta);
+    }
+    
+    private static function formatTime($seconds)
+    {
+        if ($seconds < 60) {
+            return round($seconds, 1) . "s";
+        } elseif ($seconds < 3600) {
+            $minutes = floor($seconds / 60);
+            $seconds = $seconds % 60;
+            return $minutes . "m " . round($seconds, 1) . "s";
+        } else {
+            $hours = floor($seconds / 3600);
+            $minutes = floor(($seconds % 3600) / 60);
+            return $hours . "h " . $minutes . "m";
+        }
+    }
+}
+
 function optimizeMemoryUsage()
 {
     // Force garbage collection
@@ -31,7 +180,7 @@ function optimizeMemoryUsage()
     return getMemoryUsage();
 }
 
-function batchProcessData($data, $batchSize = 1000, $callback)
+function batchProcessData($data, $callback, $batchSize = 1000)
 {
     $total = count($data);
     $processed = 0;
@@ -55,6 +204,257 @@ function batchProcessData($data, $batchSize = 1000, $callback)
     }
     
     return $results;
+}
+
+// Batch processing functions for better performance
+function batchUpsertRemote($table, $records, $batchSize = 1000)
+{
+    if (empty($records)) {
+        return;
+    }
+    
+    $db = new mysql();
+    $db->connect_remote();
+    
+    $remote_table_name = Converter::table_convert_remote($table);
+    $primary_key = Converter::primaryKey($remote_table_name);
+    $Core = Core::getInstance();
+    
+    $totalRecords = count($records);
+    $processed = 0;
+    
+    ProgressDisplay::info("Starting batch upsert for $remote_table_name ($totalRecords records)");
+    
+    for ($i = 0; $i < $totalRecords; $i += $batchSize) {
+        $batch = array_slice($records, $i, $batchSize);
+        
+        // Process each record in the batch
+        foreach ($batch as $record) {
+            // Apply table-specific conversions
+            $table_convert = ['orders'];
+            if (in_array($remote_table_name, $table_convert)) {
+                $customer_lists = $Core->remote_customer_lists;
+                $customer_id = $customer_lists[$record['customer_code']] ?? null;
+                $record['customer_id'] = $customer_id;
+            }
+            
+            if ($remote_table_name == 'order_items') {
+                $order_lists = $Core->remote_order_lists;
+                $record[$primary_key] = $record['reference_no'] . '|' . $record['item_count'];
+                $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
+            }
+            
+            if ($remote_table_name == 'artrans_items') {
+                $remote_artrans_lists = $Core->remote_artrans_lists;
+                $record[$primary_key] = $record['REFNO'] . '|' . $record['ITEMCOUNT'];
+                $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
+            }
+            
+            if (count($record) > 0) {
+                $db->update_or_insert($remote_table_name, [$primary_key => $record[$primary_key]], $record);
+            }
+        }
+        
+        $processed += count($batch);
+        ProgressDisplay::display("Processing $remote_table_name", $processed, $totalRecords);
+        
+        // Memory cleanup between batches
+        if ($i + $batchSize < $totalRecords) {
+            gc_collect_cycles();
+        }
+    }
+    
+    ProgressDisplay::info("Completed batch upsert for $remote_table_name");
+}
+
+function batchUpsertUbs($table, $records, $batchSize = 100)
+{
+    if (empty($records)) {
+        return;
+    }
+    
+    $arr = parseUbsTable($table);
+    $table_name = $arr['table'];
+    $directory = strtoupper($arr['database']);
+    $path = "C:/$directory/" . ENV::DBF_SUBPATH . "/{$table_name}.dbf";
+    
+    $keyField = Converter::primaryKey($table);
+    $totalRecords = count($records);
+    $processed = 0;
+    
+    ProgressDisplay::info("Starting batch upsert for UBS $table_name ($totalRecords records)");
+    
+    // Group records by operation type for better performance
+    $updateRecords = [];
+    $insertRecords = [];
+    
+    // First, identify which records need updates vs inserts
+    $editor = new \XBase\TableEditor($path, [
+        'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
+    ]);
+    
+    // Create index of existing records
+    $existingRecords = [];
+    while ($row = $editor->nextRecord()) {
+        $key = getRecordKey($row, $keyField);
+        $existingRecords[$key] = $row;
+    }
+    $editor->close();
+    
+    // Categorize records
+    foreach ($records as $record) {
+        $key = getRecordKey($record, $keyField);
+        if (isset($existingRecords[$key])) {
+            $updateRecords[] = ['key' => $key, 'record' => $record, 'row' => $existingRecords[$key]];
+        } else {
+            $insertRecords[] = $record;
+        }
+    }
+    
+    // Process updates in batches
+    if (!empty($updateRecords)) {
+        ProgressDisplay::info("Processing " . count($updateRecords) . " updates for $table_name");
+        
+        for ($i = 0; $i < count($updateRecords); $i += $batchSize) {
+            $batch = array_slice($updateRecords, $i, $batchSize);
+            
+            $editor = new \XBase\TableEditor($path, [
+                'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
+            ]);
+            
+            foreach ($batch as $item) {
+                $row = $item['row'];
+                $record = $item['record'];
+                
+                // Update the record
+                updateUbsRecord($editor, $row, $record, $table_name);
+            }
+            
+            $editor->save()->close();
+            $processed += count($batch);
+            ProgressDisplay::display("Updating $table_name", $processed, count($updateRecords));
+            
+            gc_collect_cycles();
+        }
+    }
+    
+    // Process inserts in batches
+    if (!empty($insertRecords)) {
+        ProgressDisplay::info("Processing " . count($insertRecords) . " inserts for $table_name");
+        
+        for ($i = 0; $i < count($insertRecords); $i += $batchSize) {
+            $batch = array_slice($insertRecords, $i, $batchSize);
+            
+            $editor = new \XBase\TableEditor($path, [
+                'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
+            ]);
+            
+            foreach ($batch as $record) {
+                insertUbsRecord($editor, $record, $table_name);
+            }
+            
+            $editor->save()->close();
+            $processed += count($batch);
+            ProgressDisplay::display("Inserting $table_name", $processed, count($insertRecords));
+            
+            gc_collect_cycles();
+        }
+    }
+    
+    ProgressDisplay::info("Completed batch upsert for UBS $table_name");
+}
+
+function getRecordKey($record, $keyField)
+{
+    if (is_array($keyField)) {
+        $composite_keys = [];
+        foreach ($keyField as $k) {
+            $composite_keys[] = trim($record[$k] ?? '');
+        }
+        return implode('|', $composite_keys);
+    } else {
+        return trim($record[$keyField] ?? '');
+    }
+}
+
+function updateUbsRecord($editor, $row, $record, $table_name)
+{
+    $columns = $editor->getColumns();
+    $columnMap = [];
+    foreach ($columns as $column) {
+        $columnMap[$column->getName()] = $column;
+    }
+    
+    foreach ($record as $field => $value) {
+        if (in_array($field, ['artrans_id'])) {
+            continue;
+        }
+        
+        $column = $columnMap[strtolower($field)] ?? null;
+        if ($column == null) {
+            continue;
+        }
+        
+        $fieldType = $column->getType();
+        
+        // Handle boolean fields
+        if ($fieldType === 'L') {
+            $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
+        }
+        
+        // Handle date fields
+        if ($fieldType === 'D') {
+            if (empty($value) || $value === '0000-00-00') {
+                $value = "        ";
+            } else {
+                $timestamp = strtotime($value);
+                if ($timestamp !== false) {
+                    $value = date('Ymd', $timestamp);
+                } else {
+                    $value = "        ";
+                }
+            }
+        }
+        
+        try {
+            $row->set($field, $value);
+        } catch (\Throwable $e) {
+            // Skip problematic fields
+        }
+    }
+    
+    $editor->writeRecord();
+}
+
+function insertUbsRecord($editor, $record, $table_name)
+{
+    $structure = [];
+    foreach ($editor->getColumns() as $column) {
+        $structure[strtoupper($column->getName())] = $column->getType();
+    }
+    
+    $newRow = $editor->appendRecord();
+    
+    foreach ($record as $field => $value) {
+        if (!isset($structure[$field])) continue;
+        
+        try {
+            if ($value === null) $value = "";
+            
+            if ($structure[$field] == 'L' && empty($value)) {
+                $value = false;
+            }
+            if ($structure[$field] === 'D') {
+                $value = date('Ymd', strtotime($value));
+            }
+            
+            $newRow->set($field, $value);
+        } catch (\Throwable $e) {
+            // Skip problematic fields
+        }
+    }
+    
+    $editor->writeRecord();
 }
 
 function insertSyncLog()
