@@ -3,6 +3,7 @@
 use XBase\DataConverter\Field\DBase7\TimestampConverter;
 
 include(__DIR__ . '/bootstrap/app.php');
+include(__DIR__ . '/bootstrap/cache.php');
 
 // Initialize sync environment and progress display
 initializeSyncEnvironment();
@@ -30,6 +31,13 @@ try {
         ProgressDisplay::display("Processing table $ubs_table", $processedTables, $totalTables);
         
         try {
+            // Check if we can resume from previous run
+            $resumeData = canResumeSync();
+            if ($resumeData && $resumeData['table'] === $ubs_table) {
+                ProgressDisplay::info("Resuming sync for $ubs_table from previous run");
+                ProgressDisplay::info("Previous progress: {$resumeData['processed_records']}/{$resumeData['total_records']} records");
+            }
+            
             // Get data counts first for better progress tracking
             $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
             $ubsCount = $db->first($countSql)['total'];
@@ -41,8 +49,15 @@ try {
                 continue;
             }
             
+            // Start cache tracking
+            startSyncCache($ubs_table, $ubsCount);
+            
+            // Fetch remote data once for the entire table
+            $remote_data = fetchServerData($ubs_table, $last_synced_at);
+            ProgressDisplay::info("Fetched " . count($remote_data) . " remote records for $ubs_table");
+            
             // Process data in chunks to avoid memory issues
-            $chunkSize = 5000; // Process 5000 records at a time
+            $chunkSize = 2000; // Process 2000 records at a time for better memory management
             $offset = 0;
             $processedRecords = 0;
             
@@ -54,32 +69,34 @@ try {
                 ";
                 
                 $ubs_data = $db->get($sql);
-                $remote_data = fetchServerData($ubs_table, $last_synced_at);
                 
-                if (empty($ubs_data) && empty($remote_data)) {
+                if (empty($ubs_data)) {
                     break;
                 }
                 
-                ProgressDisplay::info("Syncing " . count($ubs_data) . " UBS records and " . count($remote_data) . " remote records");
+                ProgressDisplay::info("Syncing " . count($ubs_data) . " UBS records with " . count($remote_data) . " remote records");
                 
                 $comparedData = syncEntity($ubs_table, $ubs_data, $remote_data);
                 
-                $remote_data = $comparedData['remote_data'];
-                $ubs_data = $comparedData['ubs_data'];
+                $remote_data_to_upsert = $comparedData['remote_data'];
+                $ubs_data_to_upsert = $comparedData['ubs_data'];
                 
                 // Use batch processing for better performance
-                if (!empty($remote_data)) {
-                    ProgressDisplay::info("Upserting " . count($remote_data) . " remote records");
-                    batchUpsertRemote($ubs_table, $remote_data);
+                if (!empty($remote_data_to_upsert)) {
+                    ProgressDisplay::info("Upserting " . count($remote_data_to_upsert) . " remote records");
+                    batchUpsertRemote($ubs_table, $remote_data_to_upsert);
                 }
                 
-                if (!empty($ubs_data)) {
-                    ProgressDisplay::info("Upserting " . count($ubs_data) . " UBS records");
-                    batchUpsertUbs($ubs_table, $ubs_data);
+                if (!empty($ubs_data_to_upsert)) {
+                    ProgressDisplay::info("Upserting " . count($ubs_data_to_upsert) . " UBS records");
+                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
                 }
                 
                 $processedRecords += count($ubs_data);
                 $offset += $chunkSize;
+                
+                // Update cache with progress
+                updateSyncCache($processedRecords, $offset);
                 
                 // Memory cleanup between chunks
                 gc_collect_cycles();
@@ -98,8 +115,13 @@ try {
             
             ProgressDisplay::info("✅ Completed sync for $ubs_table");
             
+            // Complete cache for this table
+            completeSyncCache();
+            
         } catch (Exception $e) {
             ProgressDisplay::error("Failed to sync $ubs_table: " . $e->getMessage());
+            // Clear cache on error
+            clearSyncCache();
             // Continue with next table instead of stopping
             continue;
         }

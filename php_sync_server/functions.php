@@ -206,7 +206,7 @@ function batchProcessData($data, $callback, $batchSize = 1000)
     return $results;
 }
 
-// Batch processing functions for better performance
+// High-performance batch processing functions
 function batchUpsertRemote($table, $records, $batchSize = 1000)
 {
     if (empty($records)) {
@@ -223,51 +223,56 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
     $totalRecords = count($records);
     $processed = 0;
     
-    ProgressDisplay::info("Starting batch upsert for $remote_table_name ($totalRecords records)");
+    ProgressDisplay::info("Starting high-performance batch upsert for $remote_table_name ($totalRecords records)");
     
-    for ($i = 0; $i < $totalRecords; $i += $batchSize) {
-        $batch = array_slice($records, $i, $batchSize);
-        
-        // Process each record in the batch
-        foreach ($batch as $record) {
-            // Apply table-specific conversions
-            $table_convert = ['orders'];
-            if (in_array($remote_table_name, $table_convert)) {
-                $customer_lists = $Core->remote_customer_lists;
-                $customer_id = $customer_lists[$record['customer_code']] ?? null;
-                $record['customer_id'] = $customer_id;
-            }
-            
-            if ($remote_table_name == 'order_items') {
-                $order_lists = $Core->remote_order_lists;
-                $record[$primary_key] = $record['reference_no'] . '|' . $record['item_count'];
-                $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
-            }
-            
-            if ($remote_table_name == 'artrans_items') {
-                $remote_artrans_lists = $Core->remote_artrans_lists;
-                $record[$primary_key] = $record['REFNO'] . '|' . $record['ITEMCOUNT'];
-                $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
-            }
-            
-            if (count($record) > 0) {
-                $db->update_or_insert($remote_table_name, [$primary_key => $record[$primary_key]], $record);
-            }
+    // Pre-process all records for better performance
+    $processedRecords = [];
+    foreach ($records as $record) {
+        // Apply table-specific conversions
+        $table_convert = ['orders'];
+        if (in_array($remote_table_name, $table_convert)) {
+            $customer_lists = $Core->remote_customer_lists;
+            $customer_id = $customer_lists[$record['customer_code']] ?? null;
+            $record['customer_id'] = $customer_id;
         }
+        
+        if ($remote_table_name == 'order_items') {
+            $order_lists = $Core->remote_order_lists;
+            $record[$primary_key] = $record['reference_no'] . '|' . $record['item_count'];
+            $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
+        }
+        
+        if ($remote_table_name == 'artrans_items') {
+            $remote_artrans_lists = $Core->remote_artrans_lists;
+            $record[$primary_key] = $record['REFNO'] . '|' . $record['ITEMCOUNT'];
+            $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
+        }
+        
+        if (count($record) > 0) {
+            $processedRecords[] = $record;
+        }
+    }
+    
+    // Use bulk upsert for better performance
+    for ($i = 0; $i < count($processedRecords); $i += $batchSize) {
+        $batch = array_slice($processedRecords, $i, $batchSize);
+        
+        // Bulk upsert using MySQL's ON DUPLICATE KEY UPDATE
+        $db->bulkUpsert($remote_table_name, $batch, $primary_key);
         
         $processed += count($batch);
         ProgressDisplay::display("Processing $remote_table_name", $processed, $totalRecords);
         
         // Memory cleanup between batches
-        if ($i + $batchSize < $totalRecords) {
+        if ($i + $batchSize < count($processedRecords)) {
             gc_collect_cycles();
         }
     }
     
-    ProgressDisplay::info("Completed batch upsert for $remote_table_name");
+    ProgressDisplay::info("Completed high-performance batch upsert for $remote_table_name");
 }
 
-function batchUpsertUbs($table, $records, $batchSize = 100)
+function batchUpsertUbs($table, $records, $batchSize = 500)
 {
     if (empty($records)) {
         return;
@@ -369,11 +374,23 @@ function getRecordKey($record, $keyField)
     if (is_array($keyField)) {
         $composite_keys = [];
         foreach ($keyField as $k) {
-            $composite_keys[] = trim($record[$k] ?? '');
+            // Handle both array records and XBase Record objects
+            if (is_array($record)) {
+                $composite_keys[] = trim($record[$k] ?? '');
+            } else {
+                // XBase Record object - use get() method
+                $composite_keys[] = trim($record->get($k) ?? '');
+            }
         }
         return implode('|', $composite_keys);
     } else {
-        return trim($record[$keyField] ?? '');
+        // Handle both array records and XBase Record objects
+        if (is_array($record)) {
+            return trim($record[$keyField] ?? '');
+        } else {
+            // XBase Record object - use get() method
+            return trim($record->get($keyField) ?? '');
+        }
     }
 }
 
@@ -570,104 +587,75 @@ function syncEntity($entity, $ubs_data, $remote_data)
     $ubs_key = Converter::primaryKey($entity);
     $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
 
-    $ubs_map = [];
-    $remote_map = [];
-
-    $is_composite_key = is_array($ubs_key);
-
     // Log initial memory usage
     $memoryStart = getMemoryUsage();
     dump("SyncEntity start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
     dump("UBS data count: " . count($ubs_data));
     dump("Remote data count: " . count($remote_data));
 
-    if ($remote_table_name == 'artrans') {
-        // dd($is_composite_key);
-    }
+    $is_composite_key = is_array($ubs_key);
 
-    // Process UBS data in batches to optimize memory
-    $ubs_batch_size = 5000;
-    for ($i = 0; $i < count($ubs_data); $i += $ubs_batch_size) {
-        $batch = array_slice($ubs_data, $i, $ubs_batch_size);
-        
-        foreach ($batch as $row) {
-            if ($is_composite_key) {
-                $composite_keys = [];
-                foreach ($ubs_key as $k) {
-                    $composite_keys[] = $row[$k];
-                }
-                $composite_keys = implode('|', $composite_keys);
-                $ubs_map[$composite_keys] = $row;
-            } else {
-                $ubs_map[$row[$ubs_key]] = $row;
-            }
-        }
-        
-        // Memory optimization between batches
-        if ($i + $ubs_batch_size < count($ubs_data)) {
-            gc_collect_cycles();
-        }
-    }
-
-    // Process remote data in batches
-    $remote_batch_size = 5000;
-    for ($i = 0; $i < count($remote_data); $i += $remote_batch_size) {
-        $batch = array_slice($remote_data, $i, $remote_batch_size);
-        
-        foreach ($batch as $row) {
-            $remote_map[$row[$remote_key]] = $row;
-        }
-        
-        // Memory optimization between batches
-        if ($i + $remote_batch_size < count($remote_data)) {
-            gc_collect_cycles();
-        }
-    }
-
+    // Optimized sync using array operations instead of maps
     $sync = [
         'remote_data' => [],
         'ubs_data' => [],
     ];
 
-    $all_keys = array_unique(array_merge(array_keys($ubs_map), array_keys($remote_map)));
+    // Create key-based arrays for faster lookup
+    $ubs_keys = [];
+    $remote_keys = [];
+    
+    // Process UBS data
+    foreach ($ubs_data as $row) {
+        if ($is_composite_key) {
+            $composite_keys = [];
+            foreach ($ubs_key as $k) {
+                $composite_keys[] = $row[$k] ?? '';
+            }
+            $key = implode('|', $composite_keys);
+        } else {
+            $key = $row[$ubs_key] ?? '';
+        }
+        $ubs_keys[$key] = $row;
+    }
+
+    // Process remote data
+    foreach ($remote_data as $row) {
+        $key = $row[$remote_key] ?? '';
+        $remote_keys[$key] = $row;
+    }
+
+    // Get all unique keys
+    $all_keys = array_unique(array_merge(array_keys($ubs_keys), array_keys($remote_keys)));
     dump("Total unique keys to process: " . count($all_keys));
 
-    // Process sync logic in batches
-    $sync_batch_size = 1000;
-    for ($i = 0; $i < count($all_keys); $i += $sync_batch_size) {
-        $key_batch = array_slice($all_keys, $i, $sync_batch_size);
-        
-        foreach ($key_batch as $key) {
-            $ubs = $ubs_map[$key] ?? null;
-            $remote = $remote_map[$key] ?? null;
+    // Process sync logic efficiently
+    foreach ($all_keys as $key) {
+        $ubs = $ubs_keys[$key] ?? null;
+        $remote = $remote_keys[$key] ?? null;
 
-            if ($ubs) {
-                $ubs_time = strtotime($ubs['UPDATED_ON'] ?? '1970-01-01');
-            }
-            if ($remote) {
-                $remote_time = strtotime($remote[$column_updated_at] ?? '1970-01-01');
-            }
-
-            if ($ubs && !$remote) {
+        if ($ubs && !$remote) {
+            // Only UBS data exists - sync to remote
+            $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
+        } elseif (!$ubs && $remote) {
+            // Only remote data exists - sync to UBS
+            $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
+        } elseif ($ubs && $remote) {
+            // Both exist - compare timestamps
+            $ubs_time = strtotime($ubs['UPDATED_ON'] ?? '1970-01-01');
+            $remote_time = strtotime($remote[$column_updated_at] ?? '1970-01-01');
+            
+            if ($ubs_time > $remote_time) {
                 $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
-            } elseif (!$ubs && $remote) {
+            } elseif ($remote_time > $ubs_time) {
                 $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
-            } elseif ($ubs && $remote) {
-                if ($ubs_time > $remote_time) {
-                    $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
-                } elseif ($remote_time > $ubs_time) {
-                    $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
-                }
             }
-        }
-        
-        // Memory optimization between batches
-        if ($i + $sync_batch_size < count($all_keys)) {
-            gc_collect_cycles();
-            $memoryCurrent = getMemoryUsage();
-            dump("Sync progress: " . round(($i / count($all_keys)) * 100, 2) . "% - Memory: " . $memoryCurrent['memory_usage_mb'] . "MB");
         }
     }
+
+    // Memory cleanup
+    unset($ubs_keys, $remote_keys, $all_keys);
+    gc_collect_cycles();
 
     // Final memory cleanup
     $memoryEnd = getMemoryUsage();

@@ -285,4 +285,62 @@ class mysql
 			}
 		}
 	}
+
+	// High-performance bulk upsert method
+	function bulkUpsert($table, $records, $primaryKey)
+	{
+		if (empty($records)) {
+			return;
+		}
+
+		$table_name = strpos($table, '.') !== false ? $table : "`$table`";
+		
+		// Get all columns from first record
+		$columns = array_keys($records[0]);
+		$columns_str = '`' . implode('`, `', $columns) . '`';
+		
+		// Build VALUES clause
+		$values = [];
+		foreach ($records as $record) {
+			$record_values = [];
+			foreach ($columns as $column) {
+				$value = $record[$column] ?? null;
+				
+				if (is_numeric($value) && substr($value, 0, 1) != '0') {
+					$record_values[] = $value;
+				} elseif (is_array($value)) {
+					$val = count($value) == 0 ? 'null' : implode(',', $value);
+					$record_values[] = $val != 'null' ? "'$val'" : 'null';
+				} elseif ($value === null) {
+					$record_values[] = 'null';
+				} else {
+					$record_values[] = '"' . $this->escape($value) . '"';
+				}
+			}
+			$values[] = '(' . implode(',', $record_values) . ')';
+		}
+		
+		// Build ON DUPLICATE KEY UPDATE clause
+		$update_clause = [];
+		foreach ($columns as $column) {
+			if ($column !== $primaryKey) {
+				$update_clause[] = "`$column` = VALUES(`$column`)";
+			}
+		}
+		$update_str = implode(', ', $update_clause);
+		
+		// Execute bulk upsert
+		$sql = "INSERT INTO $table_name ($columns_str) VALUES " . implode(',', $values) . 
+			   " ON DUPLICATE KEY UPDATE $update_str";
+		
+		$this->SQL_EXECUTED[] = $sql;
+		$result = mysqli_query($this->con, $sql);
+		
+		if (mysqli_error($this->con)) {
+			dump("MYSQL ERROR BULK UPSERT: " . mysqli_error($this->con));
+			dump($sql);
+		}
+		
+		return $result;
+	}
 }
