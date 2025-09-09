@@ -55,11 +55,26 @@ def sync_all():
         for dbf_name in dbf_list:
             file_name = dbf_name + ".dbf"
             full_path = os.path.join(directory_path, file_name)
+            
+            # Check if file exists before processing
+            if not os.path.exists(full_path):
+                print(f"Warning: File {full_path} does not exist, skipping...")
+                continue
+                
             try:
+                print(f"Processing {file_name}...")
                 data = read_dbf(full_path)
+                
+                # Check if we got valid data
+                if not data or not data.get('structure') or not data.get('rows'):
+                    print(f"Warning: No valid data found in {file_name}, skipping...")
+                    continue
+                    
                 sync_to_database(file_name, data, directory_name)
             except Exception as e:
-                print(f"Error processing {file_name}:", e)
+                print(f"Error processing {file_name}: {e}")
+                # Continue with next file instead of stopping
+                continue
 
 
 def single_sync():
