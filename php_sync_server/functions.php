@@ -421,15 +421,12 @@ function updateUbsRecord($editor, $row, $record, $table_name)
         
         // Handle date fields
         if ($fieldType === 'D') {
-            if (empty($value) || $value === '0000-00-00') {
-                $value = "        ";
+            $parsedDate = parseDateRobust($value);
+            if ($parsedDate !== null) {
+                $value = $parsedDate;
             } else {
-                $timestamp = strtotime($value);
-                if ($timestamp !== false) {
-                    $value = date('Ymd', $timestamp);
-                } else {
-                    $value = "        ";
-                }
+                dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
+                $value = null;
             }
         }
         
@@ -462,7 +459,13 @@ function insertUbsRecord($editor, $record, $table_name)
                 $value = false;
             }
             if ($structure[$field] === 'D') {
-                $value = date('Ymd', strtotime($value));
+                $parsedDate = parseDateRobust($value);
+                if ($parsedDate !== null) {
+                    $value = $parsedDate;
+                } else {
+                    dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
+                    $value = null;
+                }
             }
             
             $newRow->set($field, $value);
@@ -742,20 +745,12 @@ function upsertUbs($table, $record)
 
                 // Handle date fields
                 if ($fieldType === 'D') {
-                    if (empty($value) || $value === '0000-00-00') {
-                        // Set empty date to 8 spaces
-                        $value = "        ";
+                    $parsedDate = parseDateRobust($value);
+                    if ($parsedDate !== null) {
+                        $value = $parsedDate;
                     } else {
-                        // Ensure a valid timestamp can be created from the value
-                        $timestamp = strtotime($value);
-                        if ($timestamp !== false) {
-                            $value = date('Ymd', $timestamp);
-                        } else {
-                            // Handle invalid date strings gracefully. 
-                            // You might want to log this or set it to an empty date.
-                            dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to empty date.");
-                            $value = "        ";
-                        }
+                        dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
+                        $value = null;
                     }
                 }
 
@@ -834,8 +829,13 @@ function upsertUbs($table, $record)
                     $value = false;
                 }
                 if ($structure[$field] === 'D') {
-                    // Normalize to 8-character DBF format
-                    $value = date('Ymd', strtotime($value));
+                    $parsedDate = parseDateRobust($value);
+                    if ($parsedDate !== null) {
+                        $value = $parsedDate;
+                    } else {
+                        dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
+                        $value = null;
+                    }
                 }
 
                 $newRow->set($field, $value);
@@ -989,4 +989,42 @@ function parseUbsTable($input)
     }
 
     return null; // Invalid format
+}
+
+/**
+ * Robust date parsing function that handles multiple date formats
+ * @param string $dateString The date string to parse
+ * @return string|null Returns formatted date string or null if invalid
+ */
+function parseDateRobust($dateString) {
+    if (empty($dateString) || $dateString === '0000-00-00') {
+        return null; // Return null for invalid/empty dates
+    }
+    
+    $dateFormats = [
+        'Y-m-d H:i:s',
+        'Y-m-d',
+        'd/m/Y',
+        'm/d/Y',
+        'Y-m-d H:i:s.u',
+        'Y-m-d\TH:i:s',
+        'Y-m-d\TH:i:s.u',
+        'd-m-Y',
+        'm-d-Y'
+    ];
+    
+    foreach ($dateFormats as $format) {
+        $dateObj = DateTime::createFromFormat($format, $dateString);
+        if ($dateObj !== false) {
+            return $dateObj->format('Ymd'); // DBF format
+        }
+    }
+    
+    // Fallback to strtotime
+    $timestamp = strtotime($dateString);
+    if ($timestamp !== false) {
+        return date('Ymd', $timestamp);
+    }
+    
+    return null; // Return null for invalid dates
 }
