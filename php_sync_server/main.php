@@ -13,8 +13,8 @@ try {
     $db = new mysql();
     
     // Get last sync time
-    $last_synced_at = lastSyncAt();
-    $last_synced_at = "2000-08-01 00:20:00"; // For testing purpose, set to a fixed date
+    // $last_synced_at = lastSyncAt();
+    $last_synced_at = null; // For testing purpose, set to a fixed date
     
     ProgressDisplay::info("Last sync time: $last_synced_at");
     ProgressDisplay::info("Memory limit set to: " . ini_get('memory_limit'));
@@ -39,28 +39,34 @@ try {
             }
             
             // Get data counts first for better progress tracking
+            
             $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
             $ubsCount = $db->first($countSql)['total'];
+            dd($ubsCount);
             
             ProgressDisplay::info("Found $ubsCount UBS records to process for $ubs_table");
             
-            if ($ubsCount == 0) {
-                ProgressDisplay::info("No UBS data to sync for $ubs_table, skipping...");
+            // Always fetch remote data to check for server-side updates
+            $remote_data = fetchServerData($ubs_table, $last_synced_at);
+            $remoteCount = count($remote_data);
+            ProgressDisplay::info("Fetched $remoteCount remote records for $ubs_table");
+            // If no data on either side, skip this table
+            if ($ubsCount == 0 && $remoteCount == 0) {
+                ProgressDisplay::info("No data to sync for $ubs_table (no UBS or remote updates), skipping...");
                 continue;
             }
             
-            // Start cache tracking
-            startSyncCache($ubs_table, $ubsCount);
             
-            // Fetch remote data once for the entire table
-            $remote_data = fetchServerData($ubs_table, $last_synced_at);
-            ProgressDisplay::info("Fetched " . count($remote_data) . " remote records for $ubs_table");
+            // Start cache tracking with total records to process
+            $totalRecordsToProcess = max($ubsCount, $remoteCount);
+            startSyncCache($ubs_table, $totalRecordsToProcess);
             
             // Process data in chunks to avoid memory issues
             $chunkSize = 2000; // Process 2000 records at a time for better memory management
             $offset = 0;
             $processedRecords = 0;
             
+            // Process UBS data in chunks if it exists
             while ($offset < $ubsCount) {
                 $sql = "
                     SELECT * FROM `$ubs_table` 
@@ -83,8 +89,10 @@ try {
                 
                 // Use batch processing for better performance
                 if (!empty($remote_data_to_upsert)) {
+                    
                     ProgressDisplay::info("Upserting " . count($remote_data_to_upsert) . " remote records");
                     batchUpsertRemote($ubs_table, $remote_data_to_upsert);
+                    // dd(1);
                 }
                 
                 if (!empty($ubs_data_to_upsert)) {
@@ -101,7 +109,23 @@ try {
                 // Memory cleanup between chunks
                 gc_collect_cycles();
                 
-                ProgressDisplay::display("Processed $ubs_table", $processedRecords, $ubsCount);
+                ProgressDisplay::display("Processed $ubs_table", $processedRecords, $totalRecordsToProcess);
+            }
+            
+            // If no UBS data but remote data exists, sync remote-only changes
+            if ($ubsCount == 0 && $remoteCount > 0) {
+                ProgressDisplay::info("No UBS data, but found $remoteCount remote records to sync to UBS");
+                
+                $comparedData = syncEntity($ubs_table, [], $remote_data);
+                $ubs_data_to_upsert = $comparedData['ubs_data'];
+                
+                if (!empty($ubs_data_to_upsert)) {
+                    ProgressDisplay::info("Upserting " . count($ubs_data_to_upsert) . " remote records to UBS");
+                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                }
+                
+                $processedRecords = $remoteCount;
+                updateSyncCache($processedRecords, $processedRecords);
             }
             
             // Handle table-specific triggers
