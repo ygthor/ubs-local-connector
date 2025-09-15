@@ -414,6 +414,11 @@ function updateUbsRecord($editor, $row, $record, $table_name)
         
         $fieldType = $column->getType();
         
+        // Special handling for UPDATED_ON field regardless of data type
+        if (strtoupper($field) === 'UPDATED_ON') {
+            $value = validateUpdatedOnField($value, $field);
+        }
+        
         // Handle boolean fields
         if ($fieldType === 'L') {
             $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
@@ -454,6 +459,11 @@ function insertUbsRecord($editor, $record, $table_name)
         
         try {
             if ($value === null) $value = "";
+            
+            // Special handling for UPDATED_ON field regardless of data type
+            if (strtoupper($field) === 'UPDATED_ON') {
+                $value = validateUpdatedOnField($value, $field);
+            }
             
             if ($structure[$field] == 'L' && empty($value)) {
                 $value = false;
@@ -504,11 +514,29 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
 
     $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
     
+    // Debug information
+    dump("fetchServerData Debug:");
+    dump("  Table: $table");
+    dump("  Remote table: $alias_table");
+    dump("  Updated column: $column_updated_at");
+    dump("  Updated after: $updatedAfter");
+    dump("  SQL: $sql");
+    
     // Log memory usage before fetching
     $memoryBefore = getMemoryUsage();
     dump("Memory before fetch: " . $memoryBefore['memory_usage_mb'] . "MB");
     
     $data = $db->get($sql);
+    
+    // Debug: Check actual UPDATED_ON values in remote table
+    if ($table === 'ubs_ubsstk2015_ictran') {
+        $debug_sql = "SELECT COUNT(*) as total, MIN($column_updated_at) as min_date, MAX($column_updated_at) as max_date FROM $alias_table";
+        $debug_result = $db->first($debug_sql);
+        dump("Remote table $alias_table stats:");
+        dump("  Total records: " . $debug_result['total']);
+        dump("  Min UPDATED_ON: " . $debug_result['min_date']);
+        dump("  Max UPDATED_ON: " . $debug_result['max_date']);
+    }
     
     // Log memory usage after fetching
     $memoryAfter = getMemoryUsage();
@@ -539,6 +567,18 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             if ($ubs) {
                 $converted[$ubs] = $dataRow[$remote] ?? $remote;
             }
+        }
+    }
+    
+    // Validate and fix UPDATED_ON field in converted data
+    if (isset($converted['UPDATED_ON'])) {
+        $updatedOn = $converted['UPDATED_ON'];
+        if (empty($updatedOn) || 
+            $updatedOn === '0000-00-00' || 
+            $updatedOn === '0000-00-00 00:00:00' ||
+            strtotime($updatedOn) === false) {
+            $converted['UPDATED_ON'] = date('Y-m-d H:i:s');
+            dump("Warning: Invalid UPDATED_ON in converted data: '$updatedOn' - Using current date: {$converted['UPDATED_ON']}");
         }
     }
 
@@ -644,9 +684,29 @@ function syncEntity($entity, $ubs_data, $remote_data)
             // Only remote data exists - sync to UBS
             $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
         } elseif ($ubs && $remote) {
-            // Both exist - compare timestamps
-            $ubs_time = strtotime($ubs['UPDATED_ON'] ?? '1970-01-01');
-            $remote_time = strtotime($remote[$column_updated_at] ?? '1970-01-01');
+            // Both exist - compare timestamps with validation
+            $ubs_updated_on = $ubs['UPDATED_ON'] ?? null;
+            $remote_updated_on = $remote[$column_updated_at] ?? null;
+            
+            // Validate UPDATED_ON fields and convert invalid ones to current date
+            if (empty($ubs_updated_on) || 
+                $ubs_updated_on === '0000-00-00' || 
+                $ubs_updated_on === '0000-00-00 00:00:00' ||
+                strtotime($ubs_updated_on) === false) {
+                $ubs_updated_on = date('Y-m-d H:i:s');
+                dump("Warning: Invalid UPDATED_ON in UBS data: '{$ubs['UPDATED_ON']}' - Using current date: $ubs_updated_on");
+            }
+            
+            if (empty($remote_updated_on) || 
+                $remote_updated_on === '0000-00-00' || 
+                $remote_updated_on === '0000-00-00 00:00:00' ||
+                strtotime($remote_updated_on) === false) {
+                $remote_updated_on = date('Y-m-d H:i:s');
+                dump("Warning: Invalid UPDATED_ON in remote data: '{$remote[$column_updated_at]}' - Using current date: $remote_updated_on");
+            }
+            
+            $ubs_time = strtotime($ubs_updated_on);
+            $remote_time = strtotime($remote_updated_on);
             
             if ($ubs_time > $remote_time) {
                 $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
@@ -738,6 +798,11 @@ function upsertUbs($table, $record)
                 }
                 $fieldType = $column->getType();
                 
+                // Special handling for UPDATED_ON field regardless of data type
+                if (strtoupper($field) === 'UPDATED_ON') {
+                    $value = validateUpdatedOnField($value, $field);
+                }
+                
                 // Handle boolean fields
                 if ($fieldType === 'L') {
                     $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
@@ -824,6 +889,11 @@ function upsertUbs($table, $record)
             if(!isset($structure[$field])) continue;
             try {
                 if ($value === null) $value = "";
+
+                // Special handling for UPDATED_ON field regardless of data type
+                if (strtoupper($field) === 'UPDATED_ON') {
+                    $value = validateUpdatedOnField($value, $field);
+                }
 
                 if ($structure[$field] == 'L' && empty($value)) {
                     $value = false;
@@ -1027,4 +1097,27 @@ function parseDateRobust($dateString) {
     }
     
     return null; // Return null for invalid dates
+}
+
+/**
+ * Validates and fixes UPDATED_ON field values specifically
+ * @param mixed $value The UPDATED_ON value to validate
+ * @param string $fieldName The field name for logging
+ * @return string Returns valid date string
+ */
+function validateUpdatedOnField($value, $fieldName = 'UPDATED_ON') {
+    $currentDate = date('Y-m-d H:i:s');
+    
+    // Check if UPDATED_ON is invalid
+    if (empty($value) || 
+        $value === '0000-00-00' || 
+        $value === '0000-00-00 00:00:00' ||
+        strtotime($value) === false ||
+        $value === null) {
+        
+        dump("Warning: Invalid $fieldName detected: '$value' - Converting to current date: $currentDate");
+        return $currentDate;
+    }
+    
+    return $value;
 }

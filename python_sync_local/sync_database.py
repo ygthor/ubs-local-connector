@@ -8,6 +8,8 @@ def sync_to_database(filename, data, directory):
     """
     Create table and insert data directly to database
     """
+    import time
+    
     try:
         # Extract data components
         structures = data['structure']
@@ -19,6 +21,10 @@ def sync_to_database(filename, data, directory):
         directory_name = directory.lower()
         table_name = f"{prefix}_{directory_name}_{filename_base}"
         
+        # Performance monitoring
+        sync_start = time.time()
+        record_count = len(rows) if rows else 0
+        
         # Choose your database type
         db_type = os.getenv("DB_TYPE", "mysql")  # mysql, sqlite, postgresql
         
@@ -28,43 +34,84 @@ def sync_to_database(filename, data, directory):
             sync_to_sqlite(table_name, structures, rows)
         elif db_type == "postgresql":
             sync_to_postgresql(table_name, structures, rows)
+        
+        # Performance metrics
+        sync_time = time.time() - sync_start
+        if record_count > 0:
+            records_per_second = record_count / sync_time
+            print(f"📊 Performance: {records_per_second:.0f} records/sec ({sync_time:.2f}s for {record_count} records)")
             
-        print(f"Successfully synced {filename} to table {table_name}")
+        # Reduced logging for speed - only show on errors
         
     except Exception as e:
         print(f"Error syncing data: {e}")
 
 def sync_to_mysql(table_name, structures, rows):
     """
-    Create table and insert data in MySQL
+    Create table and insert data in MySQL - OPTIMIZED VERSION with batch operations
     """
+    # Optimize connection settings for bulk operations
     connection = mysql.connector.connect(
         host=os.getenv("DB_HOST", "localhost"),
         user=os.getenv("DB_USER", "root"),
         password=os.getenv("DB_PASSWORD", ""),
-        database=os.getenv("DB_NAME", "your_database")
+        database=os.getenv("DB_NAME", "your_database"),
+        autocommit=False,  # Disable autocommit for better performance
+        use_unicode=True,
+        charset='utf8mb4',
+        # Optimize for bulk operations
+        sql_mode='NO_AUTO_VALUE_ON_ZERO',
+        init_command="SET SESSION sql_mode='NO_AUTO_VALUE_ON_ZERO'"
     )
     
     cursor = connection.cursor()
 
-     # Truncate table to remove old data
-    cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
-    if cursor.fetchone():
-        cursor.execute(f"TRUNCATE TABLE `{table_name}`")
-    
     try:
+        # Truncate table to remove old data
+        cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
+        if cursor.fetchone():
+            cursor.execute(f"TRUNCATE TABLE `{table_name}`")
+        
         # Create table if not exists
         create_table_sql = generate_mysql_create_table(table_name, structures)
         cursor.execute(create_table_sql)
         
-        # Insert data
+        # Insert data - OPTIMIZED BATCH METHOD
         if rows:
             insert_sql = generate_mysql_insert_sql(table_name, structures)
+            
+            # Prepare all rows data in batch
+            batch_data = []
             for row in rows:
-                # Prepare row data in correct order
-                row_values = [row.get(struct['name']) for struct in structures]
-                cursor.execute(insert_sql, row_values)
+                row_values = []
+                for struct in structures:
+                    value = row.get(struct['name'])
+                    # Fix packet size issue - truncate very long strings
+                    if isinstance(value, str) and len(value) > 10000:
+                        value = value[:10000]  # Truncate to 10KB
+                    row_values.append(value)
+                batch_data.append(row_values)
+            
+            # Use executemany for batch insert - MUCH FASTER!
+            try:
+                cursor.executemany(insert_sql, batch_data)
+            except mysql.connector.Error as e:
+                if "packet" in str(e).lower() or "1153" in str(e):
+                    # If packet error, truncate more aggressively and retry
+                    batch_data = []
+                    for row in rows:
+                        row_values = []
+                        for struct in structures:
+                            value = row.get(struct['name'])
+                            if isinstance(value, str) and len(value) > 1000:
+                                value = value[:1000]  # Truncate to 1KB
+                            row_values.append(value)
+                        batch_data.append(row_values)
+                    cursor.executemany(insert_sql, batch_data)
+                else:
+                    raise e
         
+        # Single commit for all operations - much faster
         connection.commit()
         
     finally:
@@ -73,7 +120,7 @@ def sync_to_mysql(table_name, structures, rows):
 
 def sync_to_sqlite(table_name, structures, rows):
     """
-    Create table and insert data in SQLite
+    Create table and insert data in SQLite - OPTIMIZED VERSION
     """
     db_path = os.getenv("SQLITE_DB_PATH", "database.db")
     connection = sqlite3.connect(db_path)
@@ -84,12 +131,18 @@ def sync_to_sqlite(table_name, structures, rows):
         create_table_sql = generate_sqlite_create_table(table_name, structures)
         cursor.execute(create_table_sql)
         
-        # Insert data
+        # Insert data - OPTIMIZED BATCH METHOD
         if rows:
             insert_sql = generate_sqlite_insert_sql(table_name, structures)
+            
+            # Prepare all rows data in batch
+            batch_data = []
             for row in rows:
                 row_values = [row.get(struct['name']) for struct in structures]
-                cursor.execute(insert_sql, row_values)
+                batch_data.append(row_values)
+            
+            # Use executemany for batch insert - MUCH FASTER!
+            cursor.executemany(insert_sql, batch_data)
         
         connection.commit()
         
@@ -202,7 +255,7 @@ def generate_sqlite_insert_sql(table_name, structures):
 
 def sync_to_postgresql(table_name, structures, rows):
     """
-    Create table and insert data in PostgreSQL
+    Create table and insert data in PostgreSQL - OPTIMIZED VERSION
     """
     import psycopg2
     
@@ -221,12 +274,18 @@ def sync_to_postgresql(table_name, structures, rows):
         create_table_sql = generate_postgresql_create_table(table_name, structures)
         cursor.execute(create_table_sql)
         
-        # Insert data
+        # Insert data - OPTIMIZED BATCH METHOD
         if rows:
             insert_sql = generate_postgresql_insert_sql(table_name, structures)
+            
+            # Prepare all rows data in batch
+            batch_data = []
             for row in rows:
                 row_values = [row.get(struct['name']) for struct in structures]
-                cursor.execute(insert_sql, row_values)
+                batch_data.append(row_values)
+            
+            # Use executemany for batch insert - MUCH FASTER!
+            cursor.executemany(insert_sql, batch_data)
         
         connection.commit()
         

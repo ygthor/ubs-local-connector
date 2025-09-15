@@ -23,32 +23,31 @@ def main():
 
 
 def sync_all():
+    start_time = time.time()
+    print("🚀 Starting FAST DBF to MySQL sync...")
+    
     grouped_dbfs = {
         "UBSACC2015": [
             "arcust",
             "apvend",
-           
             "arpay",
             "arpost",
             "gldata",
             "glbatch",
             "glpost",
-            
         ],
         "UBSSTK2015": [
-            
-            # "icarea",
             "icitem",
-
             "artran",
             "ictran",
-
             "arpso",
             "icpso",
         ],
     }
 
     dbf_subpath=os.getenv("DBF_SUBPATH", "Sample")
+    total_files = sum(len(dbf_list) for dbf_list in grouped_dbfs.values())
+    processed_files = 0
 
     for directory_name, dbf_list in grouped_dbfs.items():
         directory_path = f"C:/{directory_name}/"+dbf_subpath
@@ -58,23 +57,36 @@ def sync_all():
             
             # Check if file exists before processing
             if not os.path.exists(full_path):
-                print(f"Warning: File {full_path} does not exist, skipping...")
+                print(f"⚠️  File {full_path} not found, skipping...")
                 continue
                 
             try:
-                print(f"Processing {file_name}...")
+                file_start = time.time()
+                print(f"📁 [{processed_files+1}/{total_files}] Processing {file_name}...")
+                
                 data = read_dbf(full_path)
                 
                 # Check if we got valid data
                 if not data or not data.get('structure') or not data.get('rows'):
-                    print(f"Warning: No valid data found in {file_name}, skipping...")
+                    print(f"⚠️  No data in {file_name}, skipping...")
                     continue
                     
                 sync_to_database(file_name, data, directory_name)
+                
+                file_time = time.time() - file_start
+                print(f"✅ {file_name} completed in {file_time:.2f}s ({len(data['rows'])} records)")
+                
             except Exception as e:
-                print(f"Error processing {file_name}: {e}")
-                # Continue with next file instead of stopping
+                print(f"❌ Error processing {file_name}: {e}")
                 continue
+            
+            processed_files += 1
+    
+    total_time = time.time() - start_time
+    print(f"\n🎉 SYNC COMPLETED!")
+    print(f"⏱️  Total time: {total_time:.2f} seconds")
+    print(f"📊 Files processed: {processed_files}/{total_files}")
+    print(f"⚡ Average per file: {total_time/processed_files:.2f}s" if processed_files > 0 else "")
 
 
 def single_sync():

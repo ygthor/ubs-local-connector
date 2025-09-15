@@ -5,6 +5,34 @@ use XBase\DataConverter\Field\DBase7\TimestampConverter;
 include(__DIR__ . '/bootstrap/app.php');
 include(__DIR__ . '/bootstrap/cache.php');
 
+/**
+ * Validates and fixes UPDATED_ON field values
+ * @param array $data Array of records to validate
+ * @return array Array with validated UPDATED_ON fields
+ */
+function validateAndFixUpdatedOn($data) {
+    $currentDate = date('Y-m-d H:i:s');
+    
+    foreach ($data as &$record) {
+        if (isset($record['UPDATED_ON'])) {
+            $updatedOn = $record['UPDATED_ON'];
+            
+            // Check if UPDATED_ON is invalid
+            if (empty($updatedOn) || 
+                $updatedOn === '0000-00-00' || 
+                $updatedOn === '0000-00-00 00:00:00' ||
+                strtotime($updatedOn) === false ||
+                $updatedOn === null) {
+                
+                ProgressDisplay::info("Invalid UPDATED_ON detected: '$updatedOn' - Converting to current date: $currentDate");
+                $record['UPDATED_ON'] = $currentDate;
+            }
+        }
+    }
+    
+    return $data;
+}
+
 // Initialize sync environment and progress display
 initializeSyncEnvironment();
 ProgressDisplay::start("🚀 Starting UBS Local Connector Sync Process");
@@ -42,7 +70,7 @@ try {
             
             $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
             $ubsCount = $db->first($countSql)['total'];
-            dd($ubsCount);
+ 
             
             ProgressDisplay::info("Found $ubsCount UBS records to process for $ubs_table");
             
@@ -62,7 +90,7 @@ try {
             startSyncCache($ubs_table, $totalRecordsToProcess);
             
             // Process data in chunks to avoid memory issues
-            $chunkSize = 2000; // Process 2000 records at a time for better memory management
+            $chunkSize = 500; // Reduced chunk size to prevent file lock conflicts
             $offset = 0;
             $processedRecords = 0;
             
@@ -79,6 +107,9 @@ try {
                 if (empty($ubs_data)) {
                     break;
                 }
+                
+                // Validate and fix UPDATED_ON fields in UBS data
+                $ubs_data = validateAndFixUpdatedOn($ubs_data);
                 
                 ProgressDisplay::info("Syncing " . count($ubs_data) . " UBS records with " . count($remote_data) . " remote records");
                 
@@ -108,6 +139,9 @@ try {
                 
                 // Memory cleanup between chunks
                 gc_collect_cycles();
+                
+                // Small delay between chunks to prevent file locks
+                usleep(100000); // 0.1 second delay
                 
                 ProgressDisplay::display("Processed $ubs_table", $processedRecords, $totalRecordsToProcess);
             }
@@ -152,6 +186,9 @@ try {
         
         // Memory cleanup between tables
         gc_collect_cycles();
+        
+        // Add small delay to prevent file lock conflicts
+        usleep(500000); // 0.5 second delay
     }
     
     // Log successful sync

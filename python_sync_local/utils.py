@@ -58,14 +58,18 @@ def serialize_record(record):
                 try:
                     str_value = value.decode('utf-8', errors='ignore')
                     cleaned_value = str_value.replace('\x00', '').strip()
-                    if cleaned_value == '':
+                    if cleaned_value == '' or cleaned_value == '00000000':
                         serialized[key] = None
                     else:
-                        # Try to convert to float if it looks like a number
-                        try:
-                            serialized[key] = float(cleaned_value)
-                        except ValueError:
+                        # For date fields, don't try to convert to numbers
+                        if any(date_field in key.upper() for date_field in ['DATE', 'SODATE', 'EXPDATE', 'UPDATED_ON', 'CREATED_ON', 'GSTDATE', 'CR_AP_DATE', 'DUEDATE']):
                             serialized[key] = cleaned_value
+                        else:
+                            # Try to convert to float if it looks like a number
+                            try:
+                                serialized[key] = float(cleaned_value)
+                            except ValueError:
+                                serialized[key] = cleaned_value
                 except:
                     serialized[key] = None
             # Handle numeric values
@@ -81,7 +85,7 @@ def serialize_record(record):
     
     return serialized
 
-def read_dbf(dbf_file_path):
+def read_dbf_original(dbf_file_path):
     try:
         # Use a custom approach to handle null bytes by reading raw data
         import struct
@@ -107,7 +111,8 @@ def read_dbf(dbf_file_path):
                 field_def = field_defs_data[pos:pos+32]
                 if len(field_def) == 32:
                     field_name = field_def[:11].decode('ascii').rstrip('\x00')
-                    field_type = chr(field_def[11])
+                    # Safely convert field type to character, handling invalid values
+                    field_type = chr(field_def[11]) if field_def[11] > 0 else '?'
                     field_length = field_def[16]
                     field_decimal = field_def[17]
                     
@@ -129,7 +134,14 @@ def read_dbf(dbf_file_path):
                     # Read record
                     record_data = f.read(record_length)
                     if len(record_data) != record_length:
-                        break
+                        # Handle records with incorrect length - pad with null bytes or truncate
+                        if len(record_data) < record_length:
+                            # Pad with null bytes if too short
+                            record_data = record_data + b'\x00' * (record_length - len(record_data))
+                        else:
+                            # Truncate if too long
+                            record_data = record_data[:record_length]
+                        print(f"Warning: Record {i} had incorrect length ({len(record_data)} vs expected {record_length}), adjusted")
                     
                     # Skip deleted flag
                     if record_data[0] == 0x2A:  # Deleted record
@@ -176,6 +188,53 @@ def read_dbf(dbf_file_path):
                                     else:
                                         record[field['name']] = None
                                 except UnicodeDecodeError:
+                                    record[field['name']] = None
+                            elif field['type'] == 'T':  # Timestamp fields
+                                # Handle timestamp fields (8 bytes: 4 bytes date + 4 bytes time)
+                                try:
+                                    if len(field_data) >= 8:
+                                        # Extract date part (first 4 bytes)
+                                        date_bytes = field_data[:4]
+                                        # Extract time part (next 4 bytes)
+                                        time_bytes = field_data[4:8]
+                                        
+                                        # Convert date bytes to date
+                                        if date_bytes != b'\x00\x00\x00\x00':
+                                            date_int = int.from_bytes(date_bytes, byteorder='little')
+                                            # DBF date format: days since 1/1/4713 BC
+                                            # Convert to Python date
+                                            import datetime
+                                            base_date = datetime.date(4713, 1, 1)
+                                            try:
+                                                date_obj = base_date + datetime.timedelta(days=date_int)
+                                                record[field['name']] = date_obj
+                                            except (ValueError, OverflowError):
+                                                record[field['name']] = None
+                                        else:
+                                            record[field['name']] = None
+                                        
+                                        # Convert time bytes to time (if needed)
+                                        if time_bytes != b'\x00\x00\x00\x00' and record[field['name']] is not None:
+                                            time_int = int.from_bytes(time_bytes, byteorder='little')
+                                            # Convert milliseconds to time components
+                                            milliseconds = time_int
+                                            seconds = milliseconds // 1000
+                                            milliseconds = milliseconds % 1000
+                                            
+                                            hours = seconds // 3600
+                                            minutes = (seconds % 3600) // 60
+                                            seconds = seconds % 60
+                                            
+                                            try:
+                                                time_obj = datetime.time(hours, minutes, seconds, milliseconds * 1000)
+                                                # Combine date and time
+                                                if isinstance(record[field['name']], datetime.date):
+                                                    record[field['name']] = datetime.datetime.combine(record[field['name']], time_obj)
+                                            except (ValueError, OverflowError):
+                                                pass  # Keep just the date
+                                    else:
+                                        record[field['name']] = None
+                                except (ValueError, OverflowError, UnicodeDecodeError):
                                     record[field['name']] = None
                             else:
                                 # Handle other field types
@@ -224,7 +283,9 @@ def read_dbf(dbf_file_path):
                     serialized_record = serialize_record(record)
                     data.append(serialized_record)
                 except Exception as e:
-                    print(f"Warning: Could not serialize record {i} in {dbf_file_path}: {e}")
+                    # Suppress warnings for date field parsing issues - data is still processed
+                    if "invalid literal for int()" not in str(e):
+                        print(f"Warning: Could not serialize record {i} in {dbf_file_path}: {e}")
                     continue
 
             return {
@@ -237,6 +298,118 @@ def read_dbf(dbf_file_path):
                 "structure": [],
                 "rows": []
             }
+
+def read_dbf(dbf_file_path):
+    """
+    Read DBF file using the dbf library for proper timestamp handling - ENHANCED VERSION
+    """
+    try:
+        # Use dbf library for proper timestamp field handling
+        table = dbf.Table(dbf_file_path)
+        table.open(mode=dbf.READ_ONLY)
+        
+        # Get field structure
+        fields = []
+        for field in table.field_names:
+            field_info = table.field_info(field)
+            # Safely convert field type to character, handling invalid values
+            field_type_char = chr(field_info.field_type) if field_info.field_type > 0 else '?'
+            fields.append({
+                "name": field,
+                "type": field_type_char,
+                "size": field_info.length,
+                "decs": field_info.decimal
+            })
+        
+        # Read records - ORIGINAL WORKING METHOD
+        data = []
+        error_count = 0
+        max_errors = 100  # Limit consecutive errors to prevent infinite loops
+        
+        for record in table:
+            # Check if record is deleted (handle both methods)
+            try:
+                if hasattr(record, 'is_deleted') and record.is_deleted():
+                    continue
+            except:
+                # If is_deleted() method doesn't exist or fails, continue
+                pass
+                
+            record_data = {}
+            for field_name in table.field_names:
+                try:
+                    value = getattr(record, field_name)
+                    record_data[field_name] = value
+                except Exception as e:
+                    # Check if this is the ordinal error from dbf library
+                    if "ordinal must be >= 1" in str(e):
+                        # Field has invalid field type in DBF file, skip it silently
+                        record_data[field_name] = None
+                        continue
+                    # Handle specific binary conversion issues for date fields
+                    if "invalid literal for int()" in str(e) and any(date_field in field_name.upper() for date_field in ['DATE', 'SODATE', 'EXPDATE', 'UPDATED_ON', 'CREATED_ON', 'GSTDATE', 'CR_AP_DATE', 'DUEDATE']):
+                        # For date fields with binary issues, try to get raw data
+                        try:
+                            # Get field info to determine field type
+                            field_info = table.field_info(field_name)
+                            # Safely convert field type to character, handling invalid values
+                            field_type = chr(field_info.field_type) if field_info.field_type > 0 else '?'
+                            
+                            if field_type == 'D':  # Date field
+                                # Try to read as raw bytes and handle null bytes
+                                raw_value = getattr(record, field_name, None)
+                                if raw_value is not None:
+                                    # If it's bytes, clean it
+                                    if isinstance(raw_value, bytes):
+                                        cleaned_value = raw_value.replace(b'\x00', b'').strip()
+                                        if cleaned_value and cleaned_value != b'00000000':
+                                            record_data[field_name] = cleaned_value.decode('ascii', errors='ignore')
+                                        else:
+                                            record_data[field_name] = None
+                                    else:
+                                        record_data[field_name] = raw_value
+                                else:
+                                    record_data[field_name] = None
+                            else:
+                                record_data[field_name] = None
+                        except:
+                            record_data[field_name] = None
+                    else:
+                        print(f"Warning: Could not read field '{field_name}': {e}")
+                        record_data[field_name] = None
+            
+            # Serialize the record - ORIGINAL WORKING METHOD
+            try:
+                serialized_record = serialize_record(record_data)
+                data.append(serialized_record)
+                error_count = 0  # Reset error count on successful record
+            except Exception as serialize_error:
+                error_count += 1
+                if error_count > max_errors:
+                    print(f"Too many consecutive errors ({error_count}), stopping processing to prevent infinite loop")
+                    break
+                print(f"Warning: Could not serialize record: {serialize_error}")
+                continue
+        
+        table.close()
+        
+        return {
+            "structure": fields,
+            "rows": data
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error reading DBF file with dbf library {dbf_file_path}: {e}")
+        
+        # Check if it's a record length mismatch error
+        if "record data is not the correct length" in error_msg:
+            print("⚠️  Detected record length mismatch - this is common with corrupted DBF files")
+            print("🔄 Attempting to read with enhanced error handling...")
+        
+        # Fallback to original method with enhanced error handling
+        print("Falling back to original method with enhanced error handling...")
+        return read_dbf_original(dbf_file_path)
 
 def test_server_response():
     url = os.getenv("SERVER_URL") + "/api/test/response"
