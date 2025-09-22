@@ -32,3 +32,4 @@ coverage/
 .vscode/
 .DS_Store
 php_sync_server/dbf_scripts
+__pycache__

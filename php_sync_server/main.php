@@ -3,6 +3,35 @@
 use XBase\DataConverter\Field\DBase7\TimestampConverter;
 
 include(__DIR__ . '/bootstrap/app.php');
+include(__DIR__ . '/bootstrap/cache.php');
+
+/**
+ * Validates and fixes UPDATED_ON field values
+ * @param array $data Array of records to validate
+ * @return array Array with validated UPDATED_ON fields
+ */
+function validateAndFixUpdatedOn($data) {
+    $currentDate = date('Y-m-d H:i:s');
+    
+    foreach ($data as &$record) {
+        if (isset($record['UPDATED_ON'])) {
+            $updatedOn = $record['UPDATED_ON'];
+            
+            // Check if UPDATED_ON is invalid
+            if (empty($updatedOn) || 
+                $updatedOn === '0000-00-00' || 
+                $updatedOn === '0000-00-00 00:00:00' ||
+                strtotime($updatedOn) === false ||
+                $updatedOn === null) {
+                
+                ProgressDisplay::info("Invalid UPDATED_ON detected: '$updatedOn' - Converting to current date: $currentDate");
+                $record['UPDATED_ON'] = $currentDate;
+            }
+        }
+    }
+    
+    return $data;
+}
 
 // Initialize sync environment and progress display
 initializeSyncEnvironment();
@@ -12,8 +41,8 @@ try {
     $db = new mysql();
     
     // Get last sync time
-    $last_synced_at = lastSyncAt();
-    $last_synced_at = "2000-08-01 00:20:00"; // For testing purpose, set to a fixed date
+    // $last_synced_at = lastSyncAt();
+    $last_synced_at = null; // For testing purpose, set to a fixed date
     
     ProgressDisplay::info("Last sync time: $last_synced_at");
     ProgressDisplay::info("Memory limit set to: " . ini_get('memory_limit'));
@@ -30,22 +59,42 @@ try {
         // ProgressDisplay::display("Processing table $ubs_table", $processedTables, $totalTables);
         
         try {
+            // Check if we can resume from previous run
+            $resumeData = canResumeSync();
+            if ($resumeData && $resumeData['table'] === $ubs_table) {
+                ProgressDisplay::info("Resuming sync for $ubs_table from previous run");
+                ProgressDisplay::info("Previous progress: {$resumeData['processed_records']}/{$resumeData['total_records']} records");
+            }
+            
             // Get data counts first for better progress tracking
+            
             $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
             $ubsCount = $db->first($countSql)['total'];
+ 
             
             ProgressDisplay::info("Found $ubsCount UBS records to process for $ubs_table");
             
-            if ($ubsCount == 0) {
-                ProgressDisplay::info("No UBS data to sync for $ubs_table, skipping...");
+            // Always fetch remote data to check for server-side updates
+            $remote_data = fetchServerData($ubs_table, $last_synced_at);
+            $remoteCount = count($remote_data);
+            ProgressDisplay::info("Fetched $remoteCount remote records for $ubs_table");
+            // If no data on either side, skip this table
+            if ($ubsCount == 0 && $remoteCount == 0) {
+                ProgressDisplay::info("No data to sync for $ubs_table (no UBS or remote updates), skipping...");
                 continue;
             }
             
+            
+            // Start cache tracking with total records to process
+            $totalRecordsToProcess = max($ubsCount, $remoteCount);
+            startSyncCache($ubs_table, $totalRecordsToProcess);
+            
             // Process data in chunks to avoid memory issues
-            $chunkSize = 5000; // Process 5000 records at a time
+            $chunkSize = 500; // Reduced chunk size to prevent file lock conflicts
             $offset = 0;
             $processedRecords = 0;
             
+            // Process UBS data in chunks if it exists
             while ($offset < $ubsCount) {
                 $sql = "
                     SELECT * FROM `$ubs_table` 
@@ -54,37 +103,63 @@ try {
                 ";
                 
                 $ubs_data = $db->get($sql);
-                $remote_data = fetchServerData($ubs_table, $last_synced_at);
                 
-                if (empty($ubs_data) && empty($remote_data)) {
+                if (empty($ubs_data)) {
                     break;
                 }
                 
-                ProgressDisplay::info("Syncing " . count($ubs_data) . " UBS records and " . count($remote_data) . " remote records");
+                // Validate and fix UPDATED_ON fields in UBS data
+                $ubs_data = validateAndFixUpdatedOn($ubs_data);
+                
+                ProgressDisplay::info("Syncing " . count($ubs_data) . " UBS records with " . count($remote_data) . " remote records");
                 
                 $comparedData = syncEntity($ubs_table, $ubs_data, $remote_data);
                 
-                $remote_data = $comparedData['remote_data'];
-                $ubs_data = $comparedData['ubs_data'];
+                $remote_data_to_upsert = $comparedData['remote_data'];
+                $ubs_data_to_upsert = $comparedData['ubs_data'];
                 
                 // Use batch processing for better performance
-                if (!empty($remote_data)) {
-                    ProgressDisplay::info("Upserting " . count($remote_data) . " remote records");
-                    batchUpsertRemote($ubs_table, $remote_data);
+                if (!empty($remote_data_to_upsert)) {
+                    
+                    ProgressDisplay::info("Upserting " . count($remote_data_to_upsert) . " remote records");
+                    batchUpsertRemote($ubs_table, $remote_data_to_upsert);
+                    // dd(1);
                 }
                 
-                if (!empty($ubs_data)) {
-                    ProgressDisplay::info("Upserting " . count($ubs_data) . " UBS records");
-                    batchUpsertUbs($ubs_table, $ubs_data);
+                if (!empty($ubs_data_to_upsert)) {
+                    ProgressDisplay::info("Upserting " . count($ubs_data_to_upsert) . " UBS records");
+                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
                 }
                 
                 $processedRecords += count($ubs_data);
                 $offset += $chunkSize;
                 
+                // Update cache with progress
+                updateSyncCache($processedRecords, $offset);
+                
                 // Memory cleanup between chunks
                 gc_collect_cycles();
                 
-                // ProgressDisplay::display("Processed $ubs_table", $processedRecords, $ubsCount);
+                // Small delay between chunks to prevent file locks
+                usleep(100000); // 0.1 second delay
+                
+                // ProgressDisplay::display("Processed $ubs_table", $processedRecords, $totalRecordsToProcess);
+            }
+            
+            // If no UBS data but remote data exists, sync remote-only changes
+            if ($ubsCount == 0 && $remoteCount > 0) {
+                ProgressDisplay::info("No UBS data, but found $remoteCount remote records to sync to UBS");
+                
+                $comparedData = syncEntity($ubs_table, [], $remote_data);
+                $ubs_data_to_upsert = $comparedData['ubs_data'];
+                
+                if (!empty($ubs_data_to_upsert)) {
+                    ProgressDisplay::info("Upserting " . count($ubs_data_to_upsert) . " remote records to UBS");
+                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                }
+                
+                $processedRecords = $remoteCount;
+                updateSyncCache($processedRecords, $processedRecords);
             }
             
             // Handle table-specific triggers
@@ -98,14 +173,22 @@ try {
             
             ProgressDisplay::info("✅ Completed sync for $ubs_table");
             
+            // Complete cache for this table
+            completeSyncCache();
+            
         } catch (Exception $e) {
             ProgressDisplay::error("Failed to sync $ubs_table: " . $e->getMessage());
+            // Clear cache on error
+            clearSyncCache();
             // Continue with next table instead of stopping
             continue;
         }
         
         // Memory cleanup between tables
         gc_collect_cycles();
+        
+        // Add small delay to prevent file lock conflicts
+        usleep(500000); // 0.5 second delay
     }
     
     // Log successful sync
