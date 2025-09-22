@@ -27,7 +27,7 @@ try {
     
     foreach($ubsTables as $ubs_table) {
         $processedTables++;
-        ProgressDisplay::display("Processing table $ubs_table", $processedTables, $totalTables);
+        // ProgressDisplay::display("Processing table $ubs_table", $processedTables, $totalTables);
         
         try {
             // Get data counts first for better progress tracking
@@ -84,7 +84,7 @@ try {
                 // Memory cleanup between chunks
                 gc_collect_cycles();
                 
-                ProgressDisplay::display("Processed $ubs_table", $processedRecords, $ubsCount);
+                // ProgressDisplay::display("Processed $ubs_table", $processedRecords, $ubsCount);
             }
             
             // Handle table-specific triggers

@@ -61,6 +61,7 @@ class ProgressDisplay
         self::display($message, 0, 0, true);
     }
     
+    // DONT USE, it stuck..
     public static function display($message, $current = 0, $total = 0, $force = false)
     {
         $now = microtime(true);
@@ -256,7 +257,7 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         }
         
         $processed += count($batch);
-        ProgressDisplay::display("Processing $remote_table_name", $processed, $totalRecords);
+        // ProgressDisplay::display("Processing $remote_table_name", $processed, $totalRecords);
         
         // Memory cleanup between batches
         if ($i + $batchSize < $totalRecords) {
@@ -332,7 +333,7 @@ function batchUpsertUbs($table, $records, $batchSize = 100)
             
             $editor->save()->close();
             $processed += count($batch);
-            ProgressDisplay::display("Updating $table_name", $processed, count($updateRecords));
+            // ProgressDisplay::display("Updating $table_name", $processed, count($updateRecords));
             
             gc_collect_cycles();
         }
@@ -355,7 +356,7 @@ function batchUpsertUbs($table, $records, $batchSize = 100)
             
             $editor->save()->close();
             $processed += count($batch);
-            ProgressDisplay::display("Inserting $table_name", $processed, count($insertRecords));
+            // ProgressDisplay::display("Inserting $table_name", $processed, count($insertRecords));
             
             gc_collect_cycles();
         }
