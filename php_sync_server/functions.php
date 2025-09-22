@@ -5,22 +5,22 @@ function initializeSyncEnvironment()
 {
     // Set memory limit for large data processing
     ini_set('memory_limit', '4G');
-    
+
     // Enable garbage collection
     ini_set('zend.enable_gc', 1);
-    
+
     // Set execution time limit (0 = unlimited)
     set_time_limit(0);
-    
+
     // Disable output buffering for real-time progress display
     if (ob_get_level()) {
         ob_end_flush();
     }
-    
+
     // Set error reporting
     error_reporting(E_ERROR | E_WARNING | E_PARSE);
     ini_set('display_errors', 1);
-    
+
     // Log configuration
     if (function_exists('dump')) {
         dump("🚀 Sync environment initialized:");
@@ -54,39 +54,39 @@ class ProgressDisplay
     private static $startTime;
     private static $lastUpdate = 0;
     private static $updateInterval = 1; // Update every 1 second
-    
+
     public static function start($message = "Starting process...")
     {
         self::$startTime = microtime(true);
         self::display($message, 0, 0, true);
     }
-    
+
     // DONT USE, it stuck..
     public static function display($message, $current = 0, $total = 0, $force = false)
     {
         $now = microtime(true);
-        
+
         // Only update if forced or enough time has passed
         if (!$force && ($now - self::$lastUpdate) < self::$updateInterval) {
             return;
         }
-        
+
         self::$lastUpdate = $now;
-        
+
         $memory = getMemoryUsage();
         $elapsed = $now - self::$startTime;
-        
+
         // Clear line and move cursor to beginning
         echo "\r\033[K";
-        
+
         if ($total > 0) {
             $percentage = round(($current / $total) * 100, 1);
             $barLength = 30;
             $filledLength = round(($percentage / 100) * $barLength);
             $bar = str_repeat('█', $filledLength) . str_repeat('░', $barLength - $filledLength);
-            
+
             $eta = self::calculateETA($current, $total, $elapsed);
-            
+
             echo sprintf(
                 "[%s] %s (%d/%d) %s%% | Memory: %sMB | Time: %s | ETA: %s",
                 date('H:i:s'),
@@ -107,51 +107,51 @@ class ProgressDisplay
                 self::formatTime($elapsed)
             );
         }
-        
+
         // Flush output to ensure immediate display
         flush();
     }
-    
+
     public static function complete($message = "Process completed!")
     {
         $elapsed = microtime(true) - self::$startTime;
         $memory = getMemoryUsage();
-        
+
         echo "\n";
         echo "✅ " . $message . "\n";
         echo "📊 Total Time: " . self::formatTime($elapsed) . "\n";
         echo "💾 Peak Memory: " . $memory['memory_peak_mb'] . "MB\n";
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
     }
-    
+
     public static function error($message)
     {
         echo "\n❌ ERROR: " . $message . "\n";
     }
-    
+
     public static function warning($message)
     {
         echo "\n⚠️  WARNING: " . $message . "\n";
     }
-    
+
     public static function info($message)
     {
         echo "\nℹ️  INFO: " . $message . "\n";
     }
-    
+
     private static function calculateETA($current, $total, $elapsed)
     {
         if ($current <= 0 || $elapsed <= 0) {
             return "Calculating...";
         }
-        
+
         $rate = $current / $elapsed;
         $remaining = $total - $current;
         $eta = $remaining / $rate;
-        
+
         return self::formatTime($eta);
     }
-    
+
     private static function formatTime($seconds)
     {
         if ($seconds < 60) {
@@ -172,12 +172,12 @@ function optimizeMemoryUsage()
 {
     // Force garbage collection
     gc_collect_cycles();
-    
+
     // Clear any cached data
     if (function_exists('opcache_reset')) {
         opcache_reset();
     }
-    
+
     return getMemoryUsage();
 }
 
@@ -186,24 +186,24 @@ function batchProcessData($data, $callback, $batchSize = 1000)
     $total = count($data);
     $processed = 0;
     $results = [];
-    
+
     for ($i = 0; $i < $total; $i += $batchSize) {
         $batch = array_slice($data, $i, $batchSize);
         $batchResults = $callback($batch);
         $results = array_merge($results, $batchResults);
-        
+
         $processed += count($batch);
-        
+
         // Memory optimization between batches
         if ($i + $batchSize < $total) {
             gc_collect_cycles();
         }
-        
+
         // Log progress
         $percentage = round(($processed / $total) * 100, 2);
         dump("Processed: $processed/$total ($percentage%) - Memory: " . getMemoryUsage()['memory_usage_mb'] . "MB");
     }
-    
+
     return $results;
 }
 
@@ -213,19 +213,19 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
     if (empty($records)) {
         return;
     }
-    
+
     $db = new mysql();
     $db->connect_remote();
-    
+
     $remote_table_name = Converter::table_convert_remote($table);
     $primary_key = Converter::primaryKey($remote_table_name);
     $Core = Core::getInstance();
-    
+
     $totalRecords = count($records);
     $processed = 0;
-    
+
     ProgressDisplay::info("Starting high-performance batch upsert for $remote_table_name ($totalRecords records)");
-    
+
     // Pre-process all records for better performance
     $processedRecords = [];
     foreach ($records as $record) {
@@ -236,40 +236,40 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
             $customer_id = $customer_lists[$record['customer_code']] ?? null;
             $record['customer_id'] = $customer_id;
         }
-        
+
         if ($remote_table_name == 'order_items') {
             $order_lists = $Core->remote_order_lists;
             $record[$primary_key] = $record['reference_no'] . '|' . $record['item_count'];
             $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
         }
-        
+
         if ($remote_table_name == 'artrans_items') {
             $remote_artrans_lists = $Core->remote_artrans_lists;
             $record[$primary_key] = $record['REFNO'] . '|' . $record['ITEMCOUNT'];
             $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
         }
-        
+
         if (count($record) > 0) {
             $processedRecords[] = $record;
         }
     }
-    
+
     // Use bulk upsert for better performance
     for ($i = 0; $i < count($processedRecords); $i += $batchSize) {
         $batch = array_slice($processedRecords, $i, $batchSize);
-        
+
         // Bulk upsert using MySQL's ON DUPLICATE KEY UPDATE
         $db->bulkUpsert($remote_table_name, $batch, $primary_key);
-        
+
         $processed += count($batch);
         // ProgressDisplay::display("Processing $remote_table_name", $processed, $totalRecords);
-        
+
         // Memory cleanup between batches
         if ($i + $batchSize < count($processedRecords)) {
             gc_collect_cycles();
         }
     }
-    
+
     ProgressDisplay::info("Completed high-performance batch upsert for $remote_table_name");
 }
 
@@ -278,27 +278,27 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
     if (empty($records)) {
         return;
     }
-    
+
     $arr = parseUbsTable($table);
     $table_name = $arr['table'];
     $directory = strtoupper($arr['database']);
     $path = "C:/$directory/" . ENV::DBF_SUBPATH . "/{$table_name}.dbf";
-    
+
     $keyField = Converter::primaryKey($table);
     $totalRecords = count($records);
     $processed = 0;
-    
+
     ProgressDisplay::info("Starting batch upsert for UBS $table_name ($totalRecords records)");
-    
+
     // Group records by operation type for better performance
     $updateRecords = [];
     $insertRecords = [];
-    
+
     // First, identify which records need updates vs inserts
     $editor = new \XBase\TableEditor($path, [
         'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
     ]);
-    
+
     // Create index of existing records
     $existingRecords = [];
     while ($row = $editor->nextRecord()) {
@@ -306,7 +306,7 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         $existingRecords[$key] = $row;
     }
     $editor->close();
-    
+
     // Categorize records
     foreach ($records as $record) {
         $key = getRecordKey($record, $keyField);
@@ -316,57 +316,57 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
             $insertRecords[] = $record;
         }
     }
-    
+
     // Process updates in batches
     if (!empty($updateRecords)) {
         ProgressDisplay::info("Processing " . count($updateRecords) . " updates for $table_name");
-        
+
         for ($i = 0; $i < count($updateRecords); $i += $batchSize) {
             $batch = array_slice($updateRecords, $i, $batchSize);
-            
+
             $editor = new \XBase\TableEditor($path, [
                 'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
             ]);
-            
+
             foreach ($batch as $item) {
                 $row = $item['row'];
                 $record = $item['record'];
-                
+
                 // Update the record
                 updateUbsRecord($editor, $row, $record, $table_name);
             }
-            
+
             $editor->save()->close();
             $processed += count($batch);
             // ProgressDisplay::display("Updating $table_name", $processed, count($updateRecords));
-            
+
             gc_collect_cycles();
         }
     }
-    
+
     // Process inserts in batches
     if (!empty($insertRecords)) {
         ProgressDisplay::info("Processing " . count($insertRecords) . " inserts for $table_name");
-        
+
         for ($i = 0; $i < count($insertRecords); $i += $batchSize) {
             $batch = array_slice($insertRecords, $i, $batchSize);
-            
+
             $editor = new \XBase\TableEditor($path, [
                 'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
             ]);
-            
+
             foreach ($batch as $record) {
                 insertUbsRecord($editor, $record, $table_name);
             }
-            
+
             $editor->save()->close();
             $processed += count($batch);
             // ProgressDisplay::display("Inserting $table_name", $processed, count($insertRecords));
-            
+
             gc_collect_cycles();
         }
     }
-    
+
     ProgressDisplay::info("Completed batch upsert for UBS $table_name");
 }
 
@@ -402,29 +402,29 @@ function updateUbsRecord($editor, $row, $record, $table_name)
     foreach ($columns as $column) {
         $columnMap[$column->getName()] = $column;
     }
-    
+
     foreach ($record as $field => $value) {
         if (in_array($field, ['artrans_id'])) {
             continue;
         }
-        
+
         $column = $columnMap[strtolower($field)] ?? null;
         if ($column == null) {
             continue;
         }
-        
+
         $fieldType = $column->getType();
-        
+
         // Special handling for UPDATED_ON field regardless of data type
         if (strtoupper($field) === 'UPDATED_ON') {
             $value = validateUpdatedOnField($value, $field);
         }
-        
+
         // Handle boolean fields
         if ($fieldType === 'L') {
             $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
         }
-        
+
         // Handle date fields
         if ($fieldType === 'D') {
             $parsedDate = parseDateRobust($value);
@@ -435,14 +435,14 @@ function updateUbsRecord($editor, $row, $record, $table_name)
                 $value = null;
             }
         }
-        
+
         try {
             $row->set($field, $value);
         } catch (\Throwable $e) {
             // Skip problematic fields
         }
     }
-    
+
     $editor->writeRecord();
 }
 
@@ -452,20 +452,20 @@ function insertUbsRecord($editor, $record, $table_name)
     foreach ($editor->getColumns() as $column) {
         $structure[strtoupper($column->getName())] = $column->getType();
     }
-    
+
     $newRow = $editor->appendRecord();
-    
+
     foreach ($record as $field => $value) {
         if (!isset($structure[$field])) continue;
-        
+
         try {
             if ($value === null) $value = "";
-            
+
             // Special handling for UPDATED_ON field regardless of data type
             if (strtoupper($field) === 'UPDATED_ON') {
                 $value = validateUpdatedOnField($value, $field);
             }
-            
+
             if ($structure[$field] == 'L' && empty($value)) {
                 $value = false;
             }
@@ -478,13 +478,13 @@ function insertUbsRecord($editor, $record, $table_name)
                     $value = null;
                 }
             }
-            
+
             $newRow->set($field, $value);
         } catch (\Throwable $e) {
             // Skip problematic fields
         }
     }
-    
+
     $editor->writeRecord();
 }
 
@@ -506,7 +506,7 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
 {
     // Increase memory limit for large data fetching
     increaseMemoryLimit('4G');
-    
+
     $db = new mysql;
     $db->connect_remote();
 
@@ -514,7 +514,7 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
     $column_updated_at = Converter::mapUpdatedAtField($alias_table);
 
     $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
-    
+
     // Debug information
     dump("fetchServerData Debug:");
     dump("  Table: $table");
@@ -522,13 +522,13 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
     dump("  Updated column: $column_updated_at");
     dump("  Updated after: $updatedAfter");
     dump("  SQL: $sql");
-    
+
     // Log memory usage before fetching
     $memoryBefore = getMemoryUsage();
     dump("Memory before fetch: " . $memoryBefore['memory_usage_mb'] . "MB");
-    
+
     $data = $db->get($sql);
-    
+
     // Debug: Check actual UPDATED_ON values in remote table
     if ($table === 'ubs_ubsstk2015_ictran') {
         $debug_sql = "SELECT COUNT(*) as total, MIN($column_updated_at) as min_date, MAX($column_updated_at) as max_date FROM $alias_table";
@@ -538,12 +538,12 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
         dump("  Min UPDATED_ON: " . $debug_result['min_date']);
         dump("  Max UPDATED_ON: " . $debug_result['max_date']);
     }
-    
+
     // Log memory usage after fetching
     $memoryAfter = getMemoryUsage();
     dump("Memory after fetch: " . $memoryAfter['memory_usage_mb'] . "MB");
     dump("Data rows fetched: " . count($data));
-    
+
     return $data;
 }
 
@@ -566,19 +566,21 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             $converted[$remote] = $ubs ? ($dataRow[$ubs] ?? null) : null;
         } else {
             if ($ubs) {
-                $converted[$ubs] = $dataRow[$remote] ?? $remote;
+                $converted[$ubs] = $dataRow[$remote] ?? null;
             }
         }
     }
-    
+
     // Validate and fix UPDATED_ON field in converted data
     if (isset($converted['UPDATED_ON'])) {
         $updatedOn = $converted['UPDATED_ON'];
-        if (empty($updatedOn) || 
-            $updatedOn === '0000-00-00' || 
+        if (
+            empty($updatedOn) ||
+            $updatedOn === '0000-00-00' ||
             $updatedOn === '0000-00-00 00:00:00' ||
-            strtotime($updatedOn) === false) {
-            $converted['UPDATED_ON'] = date('Y-m-d H:i:s');
+            strtotime($updatedOn) === false
+        ) {
+            $converted['UPDATED_ON'] = '1970-01-01 00:00:00';
             dump("Warning: Invalid UPDATED_ON in converted data: '$updatedOn' - Using current date: {$converted['UPDATED_ON']}");
         }
     }
@@ -625,7 +627,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
 {
     // Increase memory limit for large sync operations
     increaseMemoryLimit('4G');
-    
+
     $remote_table_name = Converter::table_convert_remote($entity);
     $remote_key = Converter::primaryKey($remote_table_name);
     $ubs_key = Converter::primaryKey($entity);
@@ -648,7 +650,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
     // Create key-based arrays for faster lookup
     $ubs_keys = [];
     $remote_keys = [];
-    
+
     // Process UBS data
     foreach ($ubs_data as $row) {
         if ($is_composite_key) {
@@ -688,27 +690,31 @@ function syncEntity($entity, $ubs_data, $remote_data)
             // Both exist - compare timestamps with validation
             $ubs_updated_on = $ubs['UPDATED_ON'] ?? null;
             $remote_updated_on = $remote[$column_updated_at] ?? null;
-            
+
             // Validate UPDATED_ON fields and convert invalid ones to current date
-            if (empty($ubs_updated_on) || 
-                $ubs_updated_on === '0000-00-00' || 
+            if (
+                empty($ubs_updated_on) ||
+                $ubs_updated_on === '0000-00-00' ||
                 $ubs_updated_on === '0000-00-00 00:00:00' ||
-                strtotime($ubs_updated_on) === false) {
-                $ubs_updated_on = date('Y-m-d H:i:s');
+                strtotime($ubs_updated_on) === false
+            ) {
+                $ubs_updated_on = '1970-01-01 00:00:00';
                 dump("Warning: Invalid UPDATED_ON in UBS data: '{$ubs['UPDATED_ON']}' - Using current date: $ubs_updated_on");
             }
-            
-            if (empty($remote_updated_on) || 
-                $remote_updated_on === '0000-00-00' || 
+
+            if (
+                empty($remote_updated_on) ||
+                $remote_updated_on === '0000-00-00' ||
                 $remote_updated_on === '0000-00-00 00:00:00' ||
-                strtotime($remote_updated_on) === false) {
+                strtotime($remote_updated_on) === false
+            ) {
                 $remote_updated_on = date('Y-m-d H:i:s');
                 dump("Warning: Invalid UPDATED_ON in remote data: '{$remote[$column_updated_at]}' - Using current date: $remote_updated_on");
             }
-            
+
             $ubs_time = strtotime($ubs_updated_on);
             $remote_time = strtotime($remote_updated_on);
-            
+
             if ($ubs_time > $remote_time) {
                 $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
             } elseif ($remote_time > $ubs_time) {
@@ -794,16 +800,16 @@ function upsertUbs($table, $record)
                 // Use the column map to get the column object directly
                 // need lowerr case
                 $column = $columnMap[strtolower($field)] ?? null;
-                if($column == null){
+                if ($column == null) {
                     continue;
                 }
                 $fieldType = $column->getType();
-                
+
                 // Special handling for UPDATED_ON field regardless of data type
                 if (strtoupper($field) === 'UPDATED_ON') {
                     $value = validateUpdatedOnField($value, $field);
                 }
-                
+
                 // Handle boolean fields
                 if ($fieldType === 'L') {
                     $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
@@ -825,7 +831,7 @@ function upsertUbs($table, $record)
                 // if (in_array($field, ['DATE', 'PLA_DODATE'])) {
                 //     $value = date('Ymd', strtotime($value));
                 // }
-              
+
 
 
 
@@ -887,7 +893,7 @@ function upsertUbs($table, $record)
         }
         // dump($new_record);
         foreach ($new_record as $field => $value) {
-            if(!isset($structure[$field])) continue;
+            if (!isset($structure[$field])) continue;
             try {
                 if ($value === null) $value = "";
 
@@ -986,7 +992,7 @@ function read_dbf($dbf_file_path)
 {
     // Increase memory limit for large DBF files
     increaseMemoryLimit('4G');
-    
+
     try {
         $table = new XBase\TableReader($dbf_file_path, [
             'encoding' => 'cp1252',
@@ -1010,7 +1016,7 @@ function read_dbf($dbf_file_path)
         $rows = [];
         $rowCount = 0;
         $batchSize = 10000; // Process in batches of 10k rows
-        
+
         while ($record = $table->nextRecord()) {
             if ($record->isDeleted()) continue;
 
@@ -1025,7 +1031,7 @@ function read_dbf($dbf_file_path)
 
             $rows[] = $rowData;
             $rowCount++;
-            
+
             // Memory optimization every batchSize rows
             if ($rowCount % $batchSize === 0) {
                 gc_collect_cycles();
@@ -1067,11 +1073,12 @@ function parseUbsTable($input)
  * @param string $dateString The date string to parse
  * @return string|null Returns formatted date string or null if invalid
  */
-function parseDateRobust($dateString) {
+function parseDateRobust($dateString)
+{
     if (empty($dateString) || $dateString === '0000-00-00') {
         return null; // Return null for invalid/empty dates
     }
-    
+
     $dateFormats = [
         'Y-m-d H:i:s',
         'Y-m-d',
@@ -1083,20 +1090,20 @@ function parseDateRobust($dateString) {
         'd-m-Y',
         'm-d-Y'
     ];
-    
+
     foreach ($dateFormats as $format) {
         $dateObj = DateTime::createFromFormat($format, $dateString);
         if ($dateObj !== false) {
             return $dateObj->format('Ymd'); // DBF format
         }
     }
-    
+
     // Fallback to strtotime
     $timestamp = strtotime($dateString);
     if ($timestamp !== false) {
         return date('Ymd', $timestamp);
     }
-    
+
     return null; // Return null for invalid dates
 }
 
@@ -1106,19 +1113,22 @@ function parseDateRobust($dateString) {
  * @param string $fieldName The field name for logging
  * @return string Returns valid date string
  */
-function validateUpdatedOnField($value, $fieldName = 'UPDATED_ON') {
+function validateUpdatedOnField($value, $fieldName = 'UPDATED_ON')
+{
     $currentDate = date('Y-m-d H:i:s');
-    
+
     // Check if UPDATED_ON is invalid
-    if (empty($value) || 
-        $value === '0000-00-00' || 
+    if (
+        empty($value) ||
+        $value === '0000-00-00' ||
         $value === '0000-00-00 00:00:00' ||
         strtotime($value) === false ||
-        $value === null) {
-        
+        $value === null
+    ) {
+
         dump("Warning: Invalid $fieldName detected: '$value' - Converting to current date: $currentDate");
         return $currentDate;
     }
-    
+
     return $value;
 }
