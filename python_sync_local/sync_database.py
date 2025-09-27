@@ -4,9 +4,15 @@ import mysql.connector
 from mysql.connector import Error
 import pymysql
 
+def safe_execute(cursor, query, params=None):
+    """Safely execute a query and consume all results to avoid 'Unread result found' errors"""
+    cursor.execute(query, params)
+    # For queries that don't return results, just execute them
+    # For queries that do return results, fetchone() or fetchall() will be called separately
+
 def sync_to_database(filename, data, directory):
     """
-    Create table and insert data directly to database
+    Create table and insert data directly to database - OPTIMIZED for large datasets
     """
     import time
     
@@ -28,7 +34,12 @@ def sync_to_database(filename, data, directory):
         # Choose your database type
         db_type = os.getenv("DB_TYPE", "mysql")  # mysql, sqlite, postgresql
         
-        if db_type == "mysql":
+        # Use ultra-fast method for large datasets
+        if db_type == "mysql" and record_count > 10000:
+            print(f"🚀 Large dataset detected ({record_count:,} records) - using ultra-fast import")
+            from ultra_fast_import import ultra_fast_mysql_import
+            ultra_fast_mysql_import(table_name, structures, rows)
+        elif db_type == "mysql":
             sync_to_mysql(table_name, structures, rows)
         elif db_type == "sqlite":
             sync_to_sqlite(table_name, structures, rows)
@@ -41,82 +52,129 @@ def sync_to_database(filename, data, directory):
             records_per_second = record_count / sync_time
             print(f"📊 Performance: {records_per_second:.0f} records/sec ({sync_time:.2f}s for {record_count} records)")
             
-        # Reduced logging for speed - only show on errors
-        
     except Exception as e:
         print(f"Error syncing data: {e}")
 
 def sync_to_mysql(table_name, structures, rows):
     """
-    Create table and insert data in MySQL - OPTIMIZED VERSION with batch operations
+    Create table and insert data in MySQL - OPTIMIZED VERSION with batch operations and retry logic
     """
-    # Optimize connection settings for bulk operations
-    connection = mysql.connector.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASSWORD", ""),
-        database=os.getenv("DB_NAME", "your_database"),
-        autocommit=False,  # Disable autocommit for better performance
-        use_unicode=True,
-        charset='utf8mb4',
-        # Optimize for bulk operations
-        sql_mode='NO_AUTO_VALUE_ON_ZERO',
-        init_command="SET SESSION sql_mode='NO_AUTO_VALUE_ON_ZERO'"
-    )
+    import time
     
-    cursor = connection.cursor()
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            # Optimize connection settings for bulk operations
+            connection = mysql.connector.connect(
+                host=os.getenv("DB_HOST", "localhost"),
+                user=os.getenv("DB_USER", "root"),
+                password=os.getenv("DB_PASSWORD", ""),
+                database=os.getenv("DB_NAME", "your_database"),
+                autocommit=False,  # Disable autocommit for better performance
+                use_unicode=True,
+                charset='utf8mb4',
+                # Add timeout settings to prevent connection drops
+                connection_timeout=60,
+                # Optimize for bulk operations
+                sql_mode='NO_AUTO_VALUE_ON_ZERO',
+                # Prevent "Unread result found" errors
+                consume_results=True,
+                init_command="SET SESSION sql_mode='NO_AUTO_VALUE_ON_ZERO'; SET SESSION wait_timeout=28800; SET SESSION interactive_timeout=28800;"
+            )
+            
+            cursor = connection.cursor(buffered=True)
 
-    try:
-        # Truncate table to remove old data
-        cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
-        if cursor.fetchone():
-            cursor.execute(f"TRUNCATE TABLE `{table_name}`")
-        
-        # Create table if not exists
-        create_table_sql = generate_mysql_create_table(table_name, structures)
-        cursor.execute(create_table_sql)
-        
-        # Insert data - OPTIMIZED BATCH METHOD
-        if rows:
-            insert_sql = generate_mysql_insert_sql(table_name, structures)
-            
-            # Prepare all rows data in batch
-            batch_data = []
-            for row in rows:
-                row_values = []
-                for struct in structures:
-                    value = row.get(struct['name'])
-                    # Fix packet size issue - truncate very long strings
-                    if isinstance(value, str) and len(value) > 10000:
-                        value = value[:10000]  # Truncate to 10KB
-                    row_values.append(value)
-                batch_data.append(row_values)
-            
-            # Use executemany for batch insert - MUCH FASTER!
             try:
-                cursor.executemany(insert_sql, batch_data)
-            except mysql.connector.Error as e:
-                if "packet" in str(e).lower() or "1153" in str(e):
-                    # If packet error, truncate more aggressively and retry
-                    batch_data = []
-                    for row in rows:
-                        row_values = []
-                        for struct in structures:
-                            value = row.get(struct['name'])
-                            if isinstance(value, str) and len(value) > 1000:
-                                value = value[:1000]  # Truncate to 1KB
-                            row_values.append(value)
-                        batch_data.append(row_values)
-                    cursor.executemany(insert_sql, batch_data)
-                else:
-                    raise e
-        
-        # Single commit for all operations - much faster
-        connection.commit()
-        
-    finally:
-        cursor.close()
-        connection.close()
+                # Set additional timeout settings to prevent connection drops
+                cursor.execute("SET SESSION wait_timeout = 28800")  # 8 hours
+                cursor.execute("SET SESSION interactive_timeout = 28800")  # 8 hours
+                cursor.execute("SET SESSION net_read_timeout = 600")  # 10 minutes
+                cursor.execute("SET SESSION net_write_timeout = 600")  # 10 minutes
+                
+                # Truncate table to remove old data
+                cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
+                result = cursor.fetchone()
+                if result:
+                    cursor.execute(f"TRUNCATE TABLE `{table_name}`")
+                
+                # Create table if not exists
+                create_table_sql = generate_mysql_create_table(table_name, structures)
+                cursor.execute(create_table_sql)
+                
+                # Insert data - OPTIMIZED CHUNKED METHOD for large datasets
+                if rows:
+                    insert_sql = generate_mysql_insert_sql(table_name, structures)
+                    
+                    # Process in smaller chunks to avoid memory issues and timeouts
+                    chunk_size = 1000  # Process 1000 records at a time
+                    total_rows = len(rows)
+                    processed_rows = 0
+                    
+                    print(f"📊 Processing {total_rows:,} records in chunks of {chunk_size:,}...")
+                    
+                    for i in range(0, total_rows, chunk_size):
+                        chunk_rows = rows[i:i + chunk_size]
+                        batch_data = []
+                        
+                        # Prepare chunk data
+                        for row in chunk_rows:
+                            row_values = []
+                            for struct in structures:
+                                value = row.get(struct['name'])
+                                # Fix packet size issue - truncate very long strings
+                                if isinstance(value, str) and len(value) > 10000:
+                                    value = value[:10000]  # Truncate to 10KB
+                                row_values.append(value)
+                            batch_data.append(row_values)
+                        
+                        # Insert chunk
+                        try:
+                            cursor.executemany(insert_sql, batch_data)
+                            connection.commit()  # Commit each chunk
+                            processed_rows += len(chunk_rows)
+                            
+                            # Progress feedback
+                            progress = (processed_rows / total_rows) * 100
+                            print(f"📈 Progress: {processed_rows:,}/{total_rows:,} ({progress:.1f}%)")
+                            
+                        except mysql.connector.Error as e:
+                            if "packet" in str(e).lower() or "1153" in str(e):
+                                # If packet error, truncate more aggressively and retry
+                                batch_data = []
+                                for row in chunk_rows:
+                                    row_values = []
+                                    for struct in structures:
+                                        value = row.get(struct['name'])
+                                        if isinstance(value, str) and len(value) > 1000:
+                                            value = value[:1000]  # Truncate to 1KB
+                                        row_values.append(value)
+                                    batch_data.append(row_values)
+                                cursor.executemany(insert_sql, batch_data)
+                                connection.commit()
+                                processed_rows += len(chunk_rows)
+                                print(f"📈 Progress: {processed_rows:,}/{total_rows:,} ({progress:.1f}%) - Retried with smaller chunks")
+                            else:
+                                raise e
+                    
+                    print(f"✅ Successfully processed {processed_rows:,} records")
+                
+            finally:
+                cursor.close()
+                connection.close()
+            
+            # If we get here, the operation was successful
+            break
+            
+        except mysql.connector.Error as e:
+            retry_count += 1
+            if "Lost connection" in str(e) and retry_count < max_retries:
+                print(f"⚠️  Connection lost, retrying ({retry_count}/{max_retries})...")
+                time.sleep(2)  # Wait before retry
+                continue
+            else:
+                raise e
 
 def sync_to_sqlite(table_name, structures, rows):
     """
@@ -257,7 +315,11 @@ def sync_to_postgresql(table_name, structures, rows):
     """
     Create table and insert data in PostgreSQL - OPTIMIZED VERSION
     """
-    import psycopg2
+    try:
+        import psycopg2
+    except ImportError:
+        print("❌ psycopg2 library not installed. Install with: pip install psycopg2-binary")
+        raise ImportError("psycopg2 library is required for PostgreSQL support")
     
     connection = psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),

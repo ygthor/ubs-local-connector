@@ -17,17 +17,17 @@ function initializeSyncEnvironment()
         ob_end_flush();
     }
 
-    // Set error reporting
-    error_reporting(E_ERROR | E_WARNING | E_PARSE);
-    ini_set('display_errors', 1);
+    // Set error reporting - suppress warnings for cleaner CLI output
+    error_reporting(E_ERROR | E_PARSE);
+    ini_set('display_errors', 0);
 
-    // Log configuration
-    if (function_exists('dump')) {
-        dump("🚀 Sync environment initialized:");
-        dump("- Memory limit: " . ini_get('memory_limit'));
-        dump("- Execution time limit: " . ini_get('max_execution_time'));
-        dump("- Garbage collection: " . (ini_get('zend.enable_gc') ? 'Enabled' : 'Disabled'));
-    }
+    // Log configuration - suppressed for cleaner output
+    // if (function_exists('dump')) {
+    //     dump("🚀 Sync environment initialized:");
+    //     dump("- Memory limit: " . ini_get('memory_limit'));
+    //     dump("- Execution time limit: " . ini_get('max_execution_time'));
+    //     dump("- Garbage collection: " . (ini_get('zend.enable_gc') ? 'Enabled' : 'Disabled'));
+    // }
 }
 
 // Memory management functions
@@ -131,7 +131,8 @@ class ProgressDisplay
 
     public static function warning($message)
     {
-        echo "\n⚠️  WARNING: " . $message . "\n";
+        // Suppress warnings for cleaner output - only show critical warnings
+        // echo "\n⚠️  WARNING: " . $message . "\n";
     }
 
     public static function info($message)
@@ -201,7 +202,7 @@ function batchProcessData($data, $callback, $batchSize = 1000)
 
         // Log progress
         $percentage = round(($processed / $total) * 100, 2);
-        dump("Processed: $processed/$total ($percentage%) - Memory: " . getMemoryUsage()['memory_usage_mb'] . "MB");
+        // dump("Processed: $processed/$total ($percentage%) - Memory: " . getMemoryUsage()['memory_usage_mb'] . "MB");
     }
 
     return $results;
@@ -431,7 +432,7 @@ function updateUbsRecord($editor, $row, $record, $table_name)
             if ($parsedDate !== null) {
                 $value = $parsedDate;
             } else {
-                dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
+                // dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
                 $value = null;
             }
         }
@@ -474,7 +475,7 @@ function insertUbsRecord($editor, $record, $table_name)
                 if ($parsedDate !== null) {
                     $value = $parsedDate;
                 } else {
-                    dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
+                    // dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
                     $value = null;
                 }
             }
@@ -515,17 +516,17 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
 
     $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
 
-    // Debug information
-    dump("fetchServerData Debug:");
-    dump("  Table: $table");
-    dump("  Remote table: $alias_table");
-    dump("  Updated column: $column_updated_at");
-    dump("  Updated after: $updatedAfter");
-    dump("  SQL: $sql");
+    // Debug information - suppressed for cleaner output
+    // dump("fetchServerData Debug:");
+    // dump("  Table: $table");
+    // dump("  Remote table: $alias_table");
+    // dump("  Updated column: $column_updated_at");
+    // dump("  Updated after: $updatedAfter");
+    // dump("  SQL: $sql");
 
-    // Log memory usage before fetching
-    $memoryBefore = getMemoryUsage();
-    dump("Memory before fetch: " . $memoryBefore['memory_usage_mb'] . "MB");
+    // Log memory usage before fetching - suppressed
+    // $memoryBefore = getMemoryUsage();
+    // dump("Memory before fetch: " . $memoryBefore['memory_usage_mb'] . "MB");
 
     $data = $db->get($sql);
 
@@ -533,16 +534,16 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
     if ($table === 'ubs_ubsstk2015_ictran') {
         $debug_sql = "SELECT COUNT(*) as total, MIN($column_updated_at) as min_date, MAX($column_updated_at) as max_date FROM $alias_table";
         $debug_result = $db->first($debug_sql);
-        dump("Remote table $alias_table stats:");
-        dump("  Total records: " . $debug_result['total']);
-        dump("  Min UPDATED_ON: " . $debug_result['min_date']);
-        dump("  Max UPDATED_ON: " . $debug_result['max_date']);
+        // dump("Remote table $alias_table stats:");
+        // dump("  Total records: " . $debug_result['total']);
+        // dump("  Min UPDATED_ON: " . $debug_result['min_date']);
+        // dump("  Max UPDATED_ON: " . $debug_result['max_date']);
     }
 
     // Log memory usage after fetching
     $memoryAfter = getMemoryUsage();
-    dump("Memory after fetch: " . $memoryAfter['memory_usage_mb'] . "MB");
-    dump("Data rows fetched: " . count($data));
+    dump("📊 Memory after fetch: " . $memoryAfter['memory_usage_mb'] . "MB");
+    dump("📊 Data rows fetched: " . count($data));
 
     return $data;
 }
@@ -581,7 +582,7 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             strtotime($updatedOn) === false
         ) {
             $converted['UPDATED_ON'] = '1970-01-01 00:00:00';
-            dump("Warning: Invalid UPDATED_ON in converted data: '$updatedOn' - Using current date: {$converted['UPDATED_ON']}");
+            // dump("Warning: Invalid UPDATED_ON in converted data: '$updatedOn' - Using current date: {$converted['UPDATED_ON']}");
         }
     }
 
@@ -633,11 +634,11 @@ function syncEntity($entity, $ubs_data, $remote_data)
     $ubs_key = Converter::primaryKey($entity);
     $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
 
-    // Log initial memory usage
-    $memoryStart = getMemoryUsage();
-    dump("SyncEntity start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
-    dump("UBS data count: " . count($ubs_data));
-    dump("Remote data count: " . count($remote_data));
+    // Log initial memory usage - suppressed for cleaner output
+    // $memoryStart = getMemoryUsage();
+    dump("🔄 SyncEntity start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
+    dump("📊 UBS data count: " . count($ubs_data));
+    dump("📊 Remote data count: " . count($remote_data));
 
     $is_composite_key = is_array($ubs_key);
 
@@ -673,7 +674,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
 
     // Get all unique keys
     $all_keys = array_unique(array_merge(array_keys($ubs_keys), array_keys($remote_keys)));
-    dump("Total unique keys to process: " . count($all_keys));
+    dump("🔑 Total unique keys to process: " . count($all_keys));
 
     // Process sync logic efficiently
     foreach ($all_keys as $key) {
@@ -699,7 +700,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
                 strtotime($ubs_updated_on) === false
             ) {
                 $ubs_updated_on = '1970-01-01 00:00:00';
-                dump("Warning: Invalid UPDATED_ON in UBS data: '{$ubs['UPDATED_ON']}' - Using current date: $ubs_updated_on");
+                // dump("Warning: Invalid UPDATED_ON in UBS data: '{$ubs['UPDATED_ON']}' - Using current date: $ubs_updated_on");
             }
 
             if (
@@ -709,7 +710,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
                 strtotime($remote_updated_on) === false
             ) {
                 $remote_updated_on = date('Y-m-d H:i:s');
-                dump("Warning: Invalid UPDATED_ON in remote data: '{$remote[$column_updated_at]}' - Using current date: $remote_updated_on");
+                // dump("Warning: Invalid UPDATED_ON in remote data: '{$remote[$column_updated_at]}' - Using current date: $remote_updated_on");
             }
 
             $ubs_time = strtotime($ubs_updated_on);
@@ -727,10 +728,10 @@ function syncEntity($entity, $ubs_data, $remote_data)
     unset($ubs_keys, $remote_keys, $all_keys);
     gc_collect_cycles();
 
-    // Final memory cleanup
-    $memoryEnd = getMemoryUsage();
-    dump("SyncEntity end - Memory: " . $memoryEnd['memory_usage_mb'] . "MB");
-    dump("Sync results - Remote: " . count($sync['remote_data']) . ", UBS: " . count($sync['ubs_data']));
+    // Final memory cleanup - suppressed for cleaner output
+    // $memoryEnd = getMemoryUsage();
+    dump("✅ SyncEntity end - Memory: " . $memoryEnd['memory_usage_mb'] . "MB");
+    dump("📊 Sync results - Remote: " . count($sync['remote_data']) . ", UBS: " . count($sync['ubs_data']));
 
     return $sync;
 }
@@ -791,7 +792,7 @@ function upsertUbs($table, $record)
         }
 
         if ($keyValue === $recordKeyValue) {
-            dump("update: $keyValue");
+            // dump("update: $keyValue");
             // dump("$keyValue === $recordKeyValue");
             foreach ($record as $field => $value) {
                 if (in_array($field, ['artrans_id'])) {
@@ -821,7 +822,7 @@ function upsertUbs($table, $record)
                     if ($parsedDate !== null) {
                         $value = $parsedDate;
                     } else {
-                        dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
+                        // dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
                         $value = null;
                     }
                 }
@@ -862,7 +863,7 @@ function upsertUbs($table, $record)
                 try {
                     $row->set($field, $value);
                 } catch (\Throwable $e) {
-                    dump($field);
+                    // dump($field);
                 }
             }
 
@@ -882,7 +883,7 @@ function upsertUbs($table, $record)
     };
 
     if (!$found) {
-        dump('insert');
+        // dump('insert');
         $newRow = $editor->appendRecord();
 
         $new_record = $BASE_RECORD;
@@ -910,7 +911,7 @@ function upsertUbs($table, $record)
                     if ($parsedDate !== null) {
                         $value = $parsedDate;
                     } else {
-                        dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
+                        // dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
                         $value = null;
                     }
                 }
@@ -919,7 +920,7 @@ function upsertUbs($table, $record)
             } catch (\Throwable $e) {
                 var_dump($fieldType);
                 var_dump($value);
-                dump("$field => $value caused problem");
+                // dump("$field => $value caused problem");
                 dd($e->getMessage());
             }
         }
@@ -933,7 +934,7 @@ function upsertRemote($table, $record)
 {
     $Core = Core::getInstance();
     $remote_table_name = Converter::table_convert_remote($table);
-    dump($remote_table_name);
+    // dump($remote_table_name);
     $primary_key = Converter::primaryKey($remote_table_name);
 
     $db = new mysql;
@@ -1011,7 +1012,7 @@ function read_dbf($dbf_file_path)
 
         // Log initial memory usage
         $memoryStart = getMemoryUsage();
-        dump("DBF read start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
+        // dump("DBF read start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
 
         $rows = [];
         $rowCount = 0;
@@ -1036,13 +1037,13 @@ function read_dbf($dbf_file_path)
             if ($rowCount % $batchSize === 0) {
                 gc_collect_cycles();
                 $memoryCurrent = getMemoryUsage();
-                dump("DBF read progress: $rowCount rows - Memory: " . $memoryCurrent['memory_usage_mb'] . "MB");
+                // dump("DBF read progress: $rowCount rows - Memory: " . $memoryCurrent['memory_usage_mb'] . "MB");
             }
         }
 
         // Final memory cleanup
         $memoryEnd = getMemoryUsage();
-        dump("DBF read end - Total rows: $rowCount - Memory: " . $memoryEnd['memory_usage_mb'] . "MB");
+        // dump("DBF read end - Total rows: $rowCount - Memory: " . $memoryEnd['memory_usage_mb'] . "MB");
 
         return [
             'structure' => $structure,
@@ -1126,7 +1127,7 @@ function validateUpdatedOnField($value, $fieldName = 'UPDATED_ON')
         $value === null
     ) {
 
-        dump("Warning: Invalid $fieldName detected: '$value' - Converting to current date: $currentDate");
+        // dump("Warning: Invalid $fieldName detected: '$value' - Converting to current date: $currentDate");
         return $currentDate;
     }
 
