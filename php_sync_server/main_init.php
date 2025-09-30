@@ -33,42 +33,67 @@ foreach ($ubsTables as $ubs_table) {
     $remoteTable = $tableMapping[$ubs_table] ?? null;
 
     if ($remoteTable == null) {
-        dd('TABLE NOT FOUND');
+        dd("TABLE NOT FOUND: $ubs_table");
     }
-
 
     $db_remote = new mysql;
     $db_remote->connect_remote();
     $db_remote->query("TRUNCATE $remoteTable");
 
-
     $processedTables++;
     ProgressDisplay::info("📁 Processing table $processedTables/$totalTables: $ubs_table");
 
-    $sql = "
-        SELECT * FROM `$ubs_table` 
-        WHERE UPDATED_ON IS NOT NULL
-        ORDER BY UPDATED_ON ASC
-    ";
-    $ubs_data = $db->get($sql);
+    // Count total rows to process
+    $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON IS NOT NULL";
+    $totalRows = $db->getOne($countSql)['total'] ?? 0;
 
-    // Validate and fix UPDATED_ON fields in UBS data
-    $ubs_data = validateAndFixUpdatedOn($ubs_data);
-    $comparedData = syncEntity($ubs_table, $ubs_data, []);
+    ProgressDisplay::info("Total rows to process: $totalRows");
 
-    $remote_data_to_upsert = $comparedData['remote_data'];
+    $chunkSize = 1000;
+    $offset = 0;
 
-    // Use batch processing for better performance
-    if (!empty($remote_data_to_upsert)) {
-        ProgressDisplay::info("Upserting " . count($remote_data_to_upsert) . " remote records");
-        // batchUpsertRemote($ubs_table, $remote_data_to_upsert);
+    while ($offset < $totalRows) {
+        ProgressDisplay::info("📦 Fetching chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
+
+        // Fetch a chunk of data
+        $sql = "
+            SELECT * FROM `$ubs_table`
+            WHERE UPDATED_ON IS NOT NULL
+            ORDER BY UPDATED_ON ASC
+            LIMIT $chunkSize OFFSET $offset
+        ";
+        $ubs_data = $db->get($sql);
+
+        if (empty($ubs_data)) {
+            break; // No more data
+        }
+
+        // ✅ Validate timestamps
+        $ubs_data = validateAndFixUpdatedOn($ubs_data);
+
+        // ✅ Compare and prepare for sync
+        $comparedData = syncEntity($ubs_table, $ubs_data, []);
+        $remote_data_to_upsert = $comparedData['remote_data'];
+
+        // ✅ Batch upsert to remote
+        if (!empty($remote_data_to_upsert)) {
+            ProgressDisplay::info("⬆️ Upserting " . count($remote_data_to_upsert) . " records...");
+            batchUpsertRemote($ubs_table, $remote_data_to_upsert);
+        }
+
+        // ✅ Free memory and move to next chunk
+        unset($ubs_data, $comparedData, $remote_data_to_upsert);
+        gc_collect_cycles();
+
+        $offset += $chunkSize;
+
+        // Small delay to avoid locking issues
+        usleep(300000); // 0.3s
     }
 
-    // Add small delay to prevent file lock conflicts
-    usleep(500000); // 0.5 second delay
-
-    echo "🔍 Finished processing $ubs_table, moving to next table...\n";
+    echo "✅ Finished processing $ubs_table\n";
 }
+
 
 // Log successful sync
 $db->insert('sync_logs', [
