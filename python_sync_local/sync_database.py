@@ -411,10 +411,10 @@ def generate_postgresql_insert_sql(table_name, structures):
 def create_sync_logs_table():
     try:
         connection = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="",  # Replace with your actual password
-            database="ubs_data"
+            host=os.getenv("DB_HOST", "localhost"),
+            user=os.getenv("DB_USER", "root"),
+            password=os.getenv("DB_PASSWORD", ""),
+            database=os.getenv("DB_NAME", "your_database"),
         )
 
         cursor = connection.cursor()
