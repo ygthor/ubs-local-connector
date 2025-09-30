@@ -45,7 +45,7 @@ foreach ($ubsTables as $ubs_table) {
 
     // Count total rows to process
     $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON IS NOT NULL";
-    $totalRows = $db->getOne($countSql)['total'] ?? 0;
+    $totalRows = $db->first($countSql)['total'] ?? 0;
 
     ProgressDisplay::info("Total rows to process: $totalRows");
 
