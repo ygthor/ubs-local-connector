@@ -143,3 +143,32 @@ function timestamp(){
     return date('Y-m-d H:i:s');
 }
 
+
+
+/**
+ * Validates and fixes UPDATED_ON field values
+ * @param array $data Array of records to validate
+ * @return array Array with validated UPDATED_ON fields
+ */
+function validateAndFixUpdatedOn($data) {
+    $currentDate = date('Y-m-d H:i:s');
+    
+    foreach ($data as &$record) {
+        if (isset($record['UPDATED_ON'])) {
+            $updatedOn = $record['UPDATED_ON'];
+            
+            // Check if UPDATED_ON is invalid
+            if (empty($updatedOn) || 
+                $updatedOn === '0000-00-00' || 
+                $updatedOn === '0000-00-00 00:00:00' ||
+                strtotime($updatedOn) === false ||
+                $updatedOn === null) {
+                
+                ProgressDisplay::info("Invalid UPDATED_ON detected: '$updatedOn' - Converting to current date: $currentDate");
+                $record['UPDATED_ON'] = $currentDate;
+            }
+        }
+    }
+    
+    return $data;
+}

@@ -137,7 +137,7 @@ class ProgressDisplay
 
     public static function info($message)
     {
-        echo "\nℹ️  INFO: " . $message . "\n";
+        echo "ℹ️  INFO: " . $message . "\n";
     }
 
     private static function calculateETA($current, $total, $elapsed)
@@ -514,7 +514,9 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
     $alias_table = Converter::table_convert_remote($table);
     $column_updated_at = Converter::mapUpdatedAtField($alias_table);
 
-    $sql = "SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'";
+    $sql = "
+        SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'
+    ";
 
     // Debug information - suppressed for cleaner output
     // dump("fetchServerData Debug:");

@@ -5,6 +5,34 @@ use XBase\DataConverter\Field\DBase7\TimestampConverter;
 include(__DIR__ . '/bootstrap/app.php');
 include(__DIR__ . '/bootstrap/cache.php');
 
+/**
+ * Validates and fixes UPDATED_ON field values
+ * @param array $data Array of records to validate
+ * @return array Array with validated UPDATED_ON fields
+ */
+function validateAndFixUpdatedOn($data) {
+    $currentDate = date('Y-m-d H:i:s');
+    
+    foreach ($data as &$record) {
+        if (isset($record['UPDATED_ON'])) {
+            $updatedOn = $record['UPDATED_ON'];
+            
+            // Check if UPDATED_ON is invalid
+            if (empty($updatedOn) || 
+                $updatedOn === '0000-00-00' || 
+                $updatedOn === '0000-00-00 00:00:00' ||
+                strtotime($updatedOn) === false ||
+                $updatedOn === null) {
+                
+                ProgressDisplay::info("Invalid UPDATED_ON detected: '$updatedOn' - Converting to current date: $currentDate");
+                $record['UPDATED_ON'] = $currentDate;
+            }
+        }
+    }
+    
+    return $data;
+}
+
 // Initialize sync environment and progress display
 initializeSyncEnvironment();
 ProgressDisplay::start("🚀 Starting UBS Local Connector Sync Process");
@@ -22,7 +50,7 @@ try {
     
     // If no last sync time, use a date far in the past to get all records
     if (empty($last_synced_at)) {
-        $last_synced_at = '2025-08-01 00:00:00';
+        $last_synced_at = '1900-01-01 00:00:00';
     }
     
     // ProgressDisplay::info("Last sync time: $last_synced_at");
@@ -71,13 +99,12 @@ try {
             try {
                 $remote_data = fetchServerData($ubs_table, $last_synced_at);
                 $remoteCount = count($remote_data);
-                ProgressDisplay::info("📊 Found $remoteCount remote records to compare for $ubs_table");
+                ProgressDisplay::info("📊 Found $remoteCount remote records to process for $ubs_table");
             } catch (Exception $e) {
                 ProgressDisplay::error("❌ Error fetching remote data for $ubs_table: " . $e->getMessage());
                 $remote_data = [];
                 $remoteCount = 0;
             }
-            
             // ProgressDisplay::info("Fetched $remoteCount remote records for $ubs_table");
             // If no data on either side, skip this table
             if ($ubsCount == 0 && $remoteCount == 0) {
@@ -85,9 +112,12 @@ try {
                 continue;
             }
             
+            // ProgressDisplay::info("🔍 Data check: UBS=$ubsCount, Remote=$remoteCount - proceeding with sync");
+            
+            
             // Start cache tracking with total records to process
             $totalRecordsToProcess = max($ubsCount, $remoteCount);
-            // startSyncCache($ubs_table, $totalRecordsToProcess);
+            startSyncCache($ubs_table, $totalRecordsToProcess);
             
             // Process data in chunks to avoid memory issues
             $chunkSize = 500; // Reduced chunk size to prevent file lock conflicts
@@ -96,23 +126,21 @@ try {
             $maxIterations = 100; // Safety limit to prevent infinite loops
             $iterationCount = 0;
             
-            
             // Process UBS data in chunks if it exists
-            // dd("$offset < $ubsCount && $iterationCount < $maxIterations");
             while ($offset < $ubsCount && $iterationCount < $maxIterations) {
-              
                 $iterationCount++;
                 $sql = "
                     SELECT * FROM `$ubs_table` 
                     WHERE UPDATED_ON > '$last_synced_at'
-                    
                     ORDER BY UPDATED_ON ASC
                     LIMIT $chunkSize OFFSET $offset
                 ";
                 
                 $ubs_data = $db->get($sql);
                 
-                if (empty($ubs_data)) break;
+                if (empty($ubs_data)) {
+                    break;
+                }
                 
                 // Validate and fix UPDATED_ON fields in UBS data
                 $ubs_data = validateAndFixUpdatedOn($ubs_data);
@@ -122,9 +150,6 @@ try {
                 // Debug output removed - loop issue fixed with ORDER BY clause
                 // echo "🔍 About to call syncEntity for $ubs_table\n";
                 $comparedData = syncEntity($ubs_table, $ubs_data, $remote_data);
-
-                dd($comparedData);
-                
                 ProgressDisplay::info("🔍 syncEntity completed for $ubs_table");
                 // echo "🔍 After syncEntity, about to process results\n";
                 
@@ -133,10 +158,12 @@ try {
                 
                 // Use batch processing for better performance
                 if (!empty($remote_data_to_upsert)) {
+                    
                     ProgressDisplay::info("Upserting " . count($remote_data_to_upsert) . " remote records");
                     batchUpsertRemote($ubs_table, $remote_data_to_upsert);
+                    // dd(1);
                 }
-
+                
                 if (!empty($ubs_data_to_upsert)) {
                     ProgressDisplay::info("Upserting " . count($ubs_data_to_upsert) . " UBS records");
                     batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
@@ -146,7 +173,7 @@ try {
                 $offset += $chunkSize;
                 
                 // Update cache with progress
-                // updateSyncCache($processedRecords, $offset);
+                updateSyncCache($processedRecords, $offset);
                 
                 // Memory cleanup between chunks
                 gc_collect_cycles();
@@ -166,17 +193,14 @@ try {
             // Additional safety check: if we've processed more records than exist, break
             if ($processedRecords >= $ubsCount) {
                 ProgressDisplay::info("✅ All UBS records processed for $ubs_table");
+                break;
             }
-            
-
-            dd(1);
             
             // If no UBS data but remote data exists, sync remote-only changes
             if ($ubsCount == 0 && $remoteCount > 0) {
                 ProgressDisplay::info("No UBS data, but found $remoteCount remote records to sync to UBS");
                 
                 $comparedData = syncEntity($ubs_table, [], $remote_data);
-                
                 $ubs_data_to_upsert = $comparedData['ubs_data'];
                 
                 if (!empty($ubs_data_to_upsert)) {
