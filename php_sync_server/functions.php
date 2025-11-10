@@ -404,7 +404,8 @@ function updateUbsRecord($editor, $row, $record, $table_name)
     $columns = $editor->getColumns();
     $columnMap = [];
     foreach ($columns as $column) {
-        $columnMap[$column->getName()] = $column;
+        $colName = strtolower($column->getName());
+        $columnMap[$colName] = $column;
     }
 
     foreach ($record as $field => $value) {
@@ -418,6 +419,8 @@ function updateUbsRecord($editor, $row, $record, $table_name)
         }
 
         $fieldType = $column->getType();
+        $fieldLength = $column->getLength();
+        $fieldDecimal = $column->getDecimalCount();
 
         // Special handling for UPDATED_ON field regardless of data type
         if (strtoupper($field) === 'UPDATED_ON') {
@@ -426,7 +429,7 @@ function updateUbsRecord($editor, $row, $record, $table_name)
 
         // Handle boolean fields
         if ($fieldType === 'L') {
-            $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
+            $value = empty($value) ? false : filter_var($value, FILTER_VALIDATE_BOOLEAN);
         }
 
         // Handle date fields
@@ -435,15 +438,48 @@ function updateUbsRecord($editor, $row, $record, $table_name)
             if ($parsedDate !== null) {
                 $value = $parsedDate;
             } else {
-                // dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
                 $value = null;
+            }
+        }
+        
+        // Truncate string values to match column length (important for DBF files)
+        if (in_array($fieldType, ['C', 'M']) && is_string($value)) {
+            // Convert to string and ensure it fits within field length
+            $value = (string)$value;
+            
+            // Try to convert encoding, but handle errors gracefully
+            $converted = @mb_convert_encoding($value, 'CP1252', 'UTF-8');
+            if ($converted !== false) {
+                $value = $converted;
+            }
+            
+            // Truncate to exact byte length (DBF uses fixed-length fields)
+            if (strlen($value) > $fieldLength) {
+                $value = substr($value, 0, $fieldLength);
+            }
+        }
+        
+        // Handle numeric fields
+        if (in_array($fieldType, ['N', 'F']) && $value !== null && $value !== '') {
+            if (is_numeric($value)) {
+                // Ensure number fits within field constraints
+                $maxValue = pow(10, $fieldLength - ($fieldDecimal > 0 ? $fieldDecimal + 1 : 0)) - 1;
+                if (abs($value) > $maxValue) {
+                    $value = $maxValue * ($value < 0 ? -1 : 1);
+                }
+                if ($fieldDecimal > 0) {
+                    $value = round($value, $fieldDecimal);
+                } else {
+                    $value = (int)$value;
+                }
             }
         }
 
         try {
             $row->set($field, $value);
         } catch (\Throwable $e) {
-            // Skip problematic fields
+            // Log the problematic field but continue
+            ProgressDisplay::warning("Skipping field '$field' in $table_name: " . $e->getMessage());
         }
     }
 
@@ -452,40 +488,89 @@ function updateUbsRecord($editor, $row, $record, $table_name)
 
 function insertUbsRecord($editor, $record, $table_name)
 {
+    $columns = $editor->getColumns();
+    $columnMap = [];
     $structure = [];
-    foreach ($editor->getColumns() as $column) {
-        $structure[strtoupper($column->getName())] = $column->getType();
+    foreach ($columns as $column) {
+        $colName = strtoupper($column->getName());
+        $columnMap[$colName] = $column;
+        $structure[$colName] = [
+            'type' => $column->getType(),
+            'length' => $column->getLength(),
+            'decimal' => $column->getDecimalCount()
+        ];
     }
 
     $newRow = $editor->appendRecord();
 
     foreach ($record as $field => $value) {
-        if (!isset($structure[$field])) continue;
+        $fieldUpper = strtoupper($field);
+        if (!isset($structure[$fieldUpper])) continue;
 
         try {
             if ($value === null) $value = "";
 
+            $fieldType = $structure[$fieldUpper]['type'];
+            $fieldLength = $structure[$fieldUpper]['length'];
+
             // Special handling for UPDATED_ON field regardless of data type
-            if (strtoupper($field) === 'UPDATED_ON') {
+            if ($fieldUpper === 'UPDATED_ON') {
                 $value = validateUpdatedOnField($value, $field);
             }
 
-            if ($structure[$field] == 'L' && empty($value)) {
-                $value = false;
+            // Handle boolean fields
+            if ($fieldType == 'L') {
+                $value = empty($value) ? false : filter_var($value, FILTER_VALIDATE_BOOLEAN);
             }
-            if ($structure[$field] === 'D') {
+            
+            // Handle date fields
+            if ($fieldType === 'D') {
                 $parsedDate = parseDateRobust($value);
                 if ($parsedDate !== null) {
                     $value = $parsedDate;
                 } else {
-                    // dump("Warning: Invalid date format for field '$field'. Value: '$value'. Setting to null.");
                     $value = null;
+                }
+            }
+            
+            // Truncate string values to match column length (important for DBF files)
+            if (in_array($fieldType, ['C', 'M']) && is_string($value)) {
+                // Convert to string and ensure it fits within field length
+                $value = (string)$value;
+                
+                // Try to convert encoding, but handle errors gracefully
+                $converted = @mb_convert_encoding($value, 'CP1252', 'UTF-8');
+                if ($converted !== false) {
+                    $value = $converted;
+                }
+                
+                // Truncate to exact byte length (DBF uses fixed-length fields)
+                if (strlen($value) > $fieldLength) {
+                    $value = substr($value, 0, $fieldLength);
+                }
+            }
+            
+            // Handle numeric fields
+            if (in_array($fieldType, ['N', 'F']) && $value !== null && $value !== '') {
+                $decimal = $structure[$fieldUpper]['decimal'];
+                if (is_numeric($value)) {
+                    // Ensure number fits within field constraints
+                    $maxValue = pow(10, $fieldLength - ($decimal > 0 ? $decimal + 1 : 0)) - 1;
+                    if (abs($value) > $maxValue) {
+                        $value = $maxValue * ($value < 0 ? -1 : 1);
+                    }
+                    if ($decimal > 0) {
+                        $value = round($value, $decimal);
+                    } else {
+                        $value = (int)$value;
+                    }
                 }
             }
 
             $newRow->set($field, $value);
         } catch (\Throwable $e) {
-            // Skip problematic fields
+            // Log the problematic field but continue
+            ProgressDisplay::warning("Skipping field '$field' in $table_name: " . $e->getMessage());
         }
     }
 

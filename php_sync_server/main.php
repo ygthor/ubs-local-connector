@@ -44,6 +44,10 @@ try {
             ProgressDisplay::info("⏭️  Skipping $ubs_table (artrans temporarily excluded)");
             continue;
         }
+        if ($remote_table_name === 'ictrans') {
+            ProgressDisplay::info("⏭️  Skipping $ubs_table (artrans temporarily excluded)");
+            continue;
+        }
         
         $processedTables++;
         ProgressDisplay::info("📁 Processing table $processedTables/$totalTables: $ubs_table");
