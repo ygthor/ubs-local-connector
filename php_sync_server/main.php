@@ -40,14 +40,14 @@ try {
     foreach($ubsTables as $ubs_table) {
         // Temporarily exclude artrans table
         $remote_table_name = Converter::table_convert_remote($ubs_table);
-        if ($remote_table_name === 'artrans') {
-            ProgressDisplay::info("⏭️  Skipping $ubs_table (artrans temporarily excluded)");
-            continue;
-        }
-        if ($remote_table_name === 'ictran') {
-            ProgressDisplay::info("⏭️  Skipping $ubs_table (artrans temporarily excluded)");
-            continue;
-        }
+        // if ($remote_table_name === 'artrans') {
+        //     ProgressDisplay::info("⏭️  Skipping $ubs_table (artrans temporarily excluded)");
+        //     continue;
+        // }
+        // if ($remote_table_name === 'ictran') {
+        //     ProgressDisplay::info("⏭️  Skipping $ubs_table (artrans temporarily excluded)");
+        //     continue;
+        // }
         
         $processedTables++;
         ProgressDisplay::info("📁 Processing table $processedTables/$totalTables: $ubs_table");
