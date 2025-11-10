@@ -123,7 +123,7 @@ try {
                 // echo "🔍 About to call syncEntity for $ubs_table\n";
                 $comparedData = syncEntity($ubs_table, $ubs_data, $remote_data);
 
-                dd($comparedData);
+                // dd($comparedData);
                 
                 ProgressDisplay::info("🔍 syncEntity completed for $ubs_table");
                 // echo "🔍 After syncEntity, about to process results\n";
@@ -167,9 +167,6 @@ try {
             if ($processedRecords >= $ubsCount) {
                 ProgressDisplay::info("✅ All UBS records processed for $ubs_table");
             }
-            
-
-            dd(1);
             
             // If no UBS data but remote data exists, sync remote-only changes
             if ($ubsCount == 0 && $remoteCount > 0) {

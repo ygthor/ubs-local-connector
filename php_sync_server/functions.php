@@ -208,6 +208,9 @@ function batchProcessData($data, $callback, $batchSize = 1000)
     return $results;
 }
 
+// Note: batchProcessData has a deprecated parameter order warning in PHP 8.0+
+// The function is currently not used in the codebase, but kept for potential future use
+
 // High-performance batch processing functions
 function batchUpsertRemote($table, $records, $batchSize = 1000)
 {
@@ -637,7 +640,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
     $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
 
     // Log initial memory usage - suppressed for cleaner output
-    // $memoryStart = getMemoryUsage();
+    $memoryStart = getMemoryUsage();
     dump("🔄 SyncEntity start - Memory: " . $memoryStart['memory_usage_mb'] . "MB");
     dump("📊 UBS data count: " . count($ubs_data));
     dump("📊 Remote data count: " . count($remote_data));
@@ -731,7 +734,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
     gc_collect_cycles();
 
     // Final memory cleanup - suppressed for cleaner output
-    // $memoryEnd = getMemoryUsage();
+    $memoryEnd = getMemoryUsage();
     dump("✅ SyncEntity end - Memory: " . $memoryEnd['memory_usage_mb'] . "MB");
     dump("📊 Sync results - Remote: " . count($sync['remote_data']) . ", UBS: " . count($sync['ubs_data']));
 
