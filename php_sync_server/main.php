@@ -13,8 +13,8 @@ try {
     $db = new mysql();
     
     // Get last sync time
-    // $last_synced_at = lastSyncAt(); // Commented out for full sync
-    $last_synced_at = null; // Set to null for FULL SYNC (process all records)
+    $last_synced_at = lastSyncAt(); // Commented out for full sync
+    // $last_synced_at = null; // Set to null for FULL SYNC (process all records)
     
     // Clear sync cache for full sync
     clearSyncCache();
