@@ -294,32 +294,123 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
 
     ProgressDisplay::info("Starting batch upsert for UBS $table_name ($totalRecords records)");
 
+    // Check if file exists and is accessible
+    if (!file_exists($path)) {
+        throw new Exception("DBF file not found: $path");
+    }
+    
+    if (!is_readable($path)) {
+        throw new Exception("DBF file is not readable: $path");
+    }
+    
+    // Try to detect and repair corruption before processing
+    try {
+        $testReader = new \XBase\TableReader($path);
+        $testReader->close();
+    } catch (\Throwable $e) {
+        $errorMsg = strtolower($e->getMessage());
+        if (strpos($errorMsg, 'clone') !== false || 
+            strpos($errorMsg, 'corrupt') !== false ||
+            strpos($errorMsg, 'length') !== false ||
+            strpos($errorMsg, 'invalid') !== false ||
+            strpos($errorMsg, 'bytes') !== false) {
+            ProgressDisplay::warning("Possible DBF corruption detected for $table_name: " . $e->getMessage());
+            ProgressDisplay::info("Attempting automatic repair...");
+            
+            // Load repair function if not already loaded
+            if (!function_exists('repairDbfFile')) {
+                $repairScript = __DIR__ . '/repair_dbf.php';
+                if (file_exists($repairScript)) {
+                    require_once $repairScript;
+                }
+            }
+            
+            if (function_exists('attemptDbfRepair') && attemptDbfRepair($path)) {
+                ProgressDisplay::info("DBF file repaired successfully, retrying...");
+                // Retry opening the file
+                try {
+                    $testReader = new \XBase\TableReader($path);
+                    $testReader->close();
+                } catch (\Throwable $retryError) {
+                    ProgressDisplay::error("File still corrupted after repair attempt");
+                    throw new Exception("DBF file appears corrupted and repair failed. Please run manually: php repair_dbf.php \"$path\"");
+                }
+            } else {
+                ProgressDisplay::error("Failed to repair DBF file automatically");
+                ProgressDisplay::error("Please run manually: php repair_dbf.php \"$path\"");
+                throw new Exception("DBF file appears corrupted. Please repair it first: " . $e->getMessage());
+            }
+        } else {
+            // Re-throw if it's not a corruption-related error
+            throw $e;
+        }
+    }
+
     // Group records by operation type for better performance
     $updateRecords = [];
     $insertRecords = [];
 
-    // First, identify which records need updates vs inserts
-    $editor = new \XBase\TableEditor($path, [
-        'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
-    ]);
+    // Try to open with clone mode first, fallback to realtime if clone fails
+    $editMode = \XBase\TableEditor::EDIT_MODE_CLONE;
+    $editor = null;
+    $maxRetries = 3;
+    $retryCount = 0;
+    
+    while ($retryCount < $maxRetries) {
+        try {
+            $editor = new \XBase\TableEditor($path, [
+                'editMode' => $editMode,
+            ]);
+            break; // Success, exit retry loop
+        } catch (\Throwable $e) {
+            $retryCount++;
+            if ($retryCount >= $maxRetries) {
+                // If clone mode fails, try realtime mode as fallback
+                if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
+                    ProgressDisplay::warning("Clone mode failed for $table_name, trying realtime mode: " . $e->getMessage());
+                    $editMode = \XBase\TableEditor::EDIT_MODE_REALTIME;
+                    $retryCount = 0; // Reset retry count for realtime mode
+                    continue;
+                } else {
+                    throw new Exception("Failed to open DBF file after $maxRetries retries: " . $e->getMessage());
+                }
+            }
+            // Wait a bit before retry (exponential backoff)
+            usleep(100000 * $retryCount); // 0.1s, 0.2s, 0.3s
+        }
+    }
 
     // Create index of existing records
     $existingRecords = [];
-    while ($row = $editor->nextRecord()) {
-        $key = getRecordKey($row, $keyField);
-        $existingRecords[$key] = $row;
+    try {
+        while ($row = $editor->nextRecord()) {
+            $key = getRecordKey($row, $keyField);
+            $existingRecords[$key] = $row;
+        }
+        $editor->close();
+    } catch (\Throwable $e) {
+        if ($editor) {
+            try {
+                $editor->close();
+            } catch (\Throwable $closeError) {
+                // Ignore close errors
+            }
+        }
+        throw new Exception("Failed to read existing records from $table_name: " . $e->getMessage());
     }
-    $editor->close();
 
-    // Categorize records
+    // Categorize records (store only keys, not row objects since they can't be reused)
     foreach ($records as $record) {
         $key = getRecordKey($record, $keyField);
         if (isset($existingRecords[$key])) {
-            $updateRecords[] = ['key' => $key, 'record' => $record, 'row' => $existingRecords[$key]];
+            $updateRecords[] = ['key' => $key, 'record' => $record];
         } else {
             $insertRecords[] = $record;
         }
     }
+    
+    // Clear existingRecords to free memory (we only need the keys now)
+    unset($existingRecords);
 
     // Process updates in batches
     if (!empty($updateRecords)) {
@@ -327,23 +418,66 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
 
         for ($i = 0; $i < count($updateRecords); $i += $batchSize) {
             $batch = array_slice($updateRecords, $i, $batchSize);
+            $batchEditor = null;
+            $retryCount = 0;
+            
+            while ($retryCount < $maxRetries) {
+                try {
+                    $batchEditor = new \XBase\TableEditor($path, [
+                        'editMode' => $editMode,
+                    ]);
+                    
+                    // Need to find the records again since we're opening a new editor
+                    foreach ($batch as $item) {
+                        $key = $item['key'];
+                        $record = $item['record'];
+                        
+                        // Find the record in the editor
+                        $batchEditor->moveTo(0);
+                        $found = false;
+                        while ($row = $batchEditor->nextRecord()) {
+                            $rowKey = getRecordKey($row, $keyField);
+                            if ($rowKey === $key) {
+                                updateUbsRecord($batchEditor, $row, $record, $table_name);
+                                $found = true;
+                                break;
+                            }
+                        }
+                        if (!$found) {
+                            ProgressDisplay::warning("Record with key '$key' not found for update in $table_name");
+                        }
+                    }
 
-            $editor = new \XBase\TableEditor($path, [
-                'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
-            ]);
-
-            foreach ($batch as $item) {
-                $row = $item['row'];
-                $record = $item['record'];
-
-                // Update the record
-                updateUbsRecord($editor, $row, $record, $table_name);
+                    if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
+                        $batchEditor->save();
+                    }
+                    $batchEditor->close();
+                    break; // Success
+                } catch (\Throwable $e) {
+                    $retryCount++;
+                    if ($batchEditor) {
+                        try {
+                            $batchEditor->close();
+                        } catch (\Throwable $closeError) {
+                            // Ignore close errors
+                        }
+                    }
+                    
+                    if ($retryCount >= $maxRetries) {
+                        if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
+                            ProgressDisplay::warning("Clone mode failed, trying realtime mode for batch update");
+                            $editMode = \XBase\TableEditor::EDIT_MODE_REALTIME;
+                            $retryCount = 0;
+                            continue;
+                        } else {
+                            throw new Exception("Failed to update batch in $table_name: " . $e->getMessage());
+                        }
+                    }
+                    usleep(100000 * $retryCount); // Exponential backoff
+                }
             }
-
-            $editor->save()->close();
+            
             $processed += count($batch);
-            // ProgressDisplay::display("Updating $table_name", $processed, count($updateRecords));
-
             gc_collect_cycles();
         }
     }
@@ -354,19 +488,49 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
 
         for ($i = 0; $i < count($insertRecords); $i += $batchSize) {
             $batch = array_slice($insertRecords, $i, $batchSize);
+            $batchEditor = null;
+            $retryCount = 0;
+            
+            while ($retryCount < $maxRetries) {
+                try {
+                    $batchEditor = new \XBase\TableEditor($path, [
+                        'editMode' => $editMode,
+                    ]);
 
-            $editor = new \XBase\TableEditor($path, [
-                'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
-            ]);
+                    foreach ($batch as $record) {
+                        insertUbsRecord($batchEditor, $record, $table_name);
+                    }
 
-            foreach ($batch as $record) {
-                insertUbsRecord($editor, $record, $table_name);
+                    if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
+                        $batchEditor->save();
+                    }
+                    $batchEditor->close();
+                    break; // Success
+                } catch (\Throwable $e) {
+                    $retryCount++;
+                    if ($batchEditor) {
+                        try {
+                            $batchEditor->close();
+                        } catch (\Throwable $closeError) {
+                            // Ignore close errors
+                        }
+                    }
+                    
+                    if ($retryCount >= $maxRetries) {
+                        if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
+                            ProgressDisplay::warning("Clone mode failed, trying realtime mode for batch insert");
+                            $editMode = \XBase\TableEditor::EDIT_MODE_REALTIME;
+                            $retryCount = 0;
+                            continue;
+                        } else {
+                            throw new Exception("Failed to insert batch in $table_name: " . $e->getMessage());
+                        }
+                    }
+                    usleep(100000 * $retryCount); // Exponential backoff
+                }
             }
-
-            $editor->save()->close();
+            
             $processed += count($batch);
-            // ProgressDisplay::display("Inserting $table_name", $processed, count($insertRecords));
-
             gc_collect_cycles();
         }
     }
@@ -1222,4 +1386,52 @@ function validateUpdatedOnField($value, $fieldName = 'UPDATED_ON')
     }
 
     return $value;
+}
+
+/**
+ * Attempt to repair a corrupted DBF file
+ * @param string $filePath Path to the DBF file
+ * @return bool True if repair was successful, false otherwise
+ */
+function attemptDbfRepair($filePath)
+{
+    if (!file_exists($filePath)) {
+        return false;
+    }
+    
+    try {
+        // Create a temporary repair script path
+        $repairScript = __DIR__ . '/repair_dbf.php';
+        if (!file_exists($repairScript)) {
+            ProgressDisplay::warning("Repair script not found at $repairScript");
+            return false;
+        }
+        
+        // Use the repair function directly
+        require_once $repairScript;
+        
+        $tempPath = $filePath . '.temp.' . time();
+        $success = repairDbfFile($filePath, $tempPath);
+        
+        if ($success && file_exists($tempPath)) {
+            // Create backup of original
+            $backupPath = $filePath . '.backup.' . date('YmdHis');
+            copy($filePath, $backupPath);
+            
+            // Replace original with repaired version
+            if (copy($tempPath, $filePath)) {
+                unlink($tempPath);
+                ProgressDisplay::info("DBF file repaired successfully (backup: $backupPath)");
+                return true;
+            } else {
+                ProgressDisplay::warning("Repair successful but failed to replace original. Repaired file: $tempPath");
+                return false;
+            }
+        }
+        
+        return false;
+    } catch (\Throwable $e) {
+        ProgressDisplay::error("Repair attempt failed: " . $e->getMessage());
+        return false;
+    }
 }
