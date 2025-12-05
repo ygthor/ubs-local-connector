@@ -102,9 +102,23 @@ try {
             // Always fetch remote data to check for server-side updates
             // ProgressDisplay::info("🔍 About to fetch remote data for $ubs_table");
             try {
+                ProgressDisplay::info("🔍 Fetching remote data for $ubs_table (updated after: $last_synced_at)");
                 $remote_data = fetchServerData($ubs_table, $last_synced_at);
                 $remoteCount = count($remote_data);
                 ProgressDisplay::info("📊 Found $remoteCount remote records to compare for $ubs_table");
+                
+                // ✅ If no remote data found with timestamp filter, but we have UBS data, 
+                // check if remote has ANY data (might be missing in local)
+                if ($remoteCount == 0 && $ubsCount > 0) {
+                    ProgressDisplay::info("🔍 No remote records with timestamp filter, checking if remote has any records at all...");
+                    $db_remote_check = new mysql();
+                    $db_remote_check->connect_remote();
+                    $remote_table_name = Converter::table_convert_remote($ubs_table);
+                    $totalRemoteSql = "SELECT COUNT(*) as total FROM $remote_table_name";
+                    $totalRemote = $db_remote_check->first($totalRemoteSql)['total'] ?? 0;
+                    ProgressDisplay::info("📊 Remote table $remote_table_name has $totalRemote total records");
+                    $db_remote_check->close();
+                }
             } catch (Exception $e) {
                 ProgressDisplay::error("❌ Error fetching remote data for $ubs_table: " . $e->getMessage());
                 $remote_data = [];
@@ -130,9 +144,9 @@ try {
             $iterationCount = 0;
             
             
-            // ✅ Process remote-only records first (records that exist in remote but not in local UBS)
-            // This ensures we sync missing records from remote to local
-            if ($remoteCount > 0 && $ubsCount > 0) {
+            // ✅ Process remote-only records (records that exist in remote but not in local UBS)
+            // This ensures we sync missing records from remote to local, even if they're older than last_synced_at
+            if ($remoteCount > 0) {
                 ProgressDisplay::info("🔍 Checking for remote-only records (missing in local UBS)...");
                 
                 // Get all UBS keys that exist (to compare with remote)
@@ -190,6 +204,75 @@ try {
                     ProgressDisplay::info("✓ No remote-only records found (all remote records exist in local)");
                 }
                 unset($allUbsKeys, $remote_only_records); // Free memory
+            } elseif ($ubsCount == 0) {
+                // ✅ If no remote data found with timestamp filter, but local has no data,
+                // fetch ALL remote records to check if there are any missing in local
+                ProgressDisplay::info("🔍 No remote records with timestamp filter, checking for ALL remote records missing in local...");
+                try {
+                    $db_remote_all = new mysql();
+                    $db_remote_all->connect_remote();
+                    $remote_table_name = Converter::table_convert_remote($ubs_table);
+                    $allRemoteSql = "SELECT * FROM $remote_table_name";
+                    $allRemoteData = $db_remote_all->get($allRemoteSql);
+                    $db_remote_all->close();
+                    
+                    if (!empty($allRemoteData)) {
+                        ProgressDisplay::info("📊 Found " . count($allRemoteData) . " total remote records (ignoring timestamp filter)");
+                        
+                        // Get all local UBS keys
+                        $allUbsKeys = [];
+                        $ubs_key = Converter::primaryKey($ubs_table);
+                        $is_composite_key = is_array($ubs_key);
+                        
+                        if ($is_composite_key) {
+                            $keyColumns = array_map(function($k) { return "`$k`"; }, $ubs_key);
+                            $keySql = "SELECT " . implode(', ', $keyColumns) . " FROM `$ubs_table`";
+                        } else {
+                            $keySql = "SELECT `$ubs_key` FROM `$ubs_table`";
+                        }
+                        
+                        $allUbsKeysData = $db->get($keySql);
+                        foreach ($allUbsKeysData as $row) {
+                            if ($is_composite_key) {
+                                $composite_keys = [];
+                                foreach ($ubs_key as $k) {
+                                    $composite_keys[] = $row[$k] ?? '';
+                                }
+                                $key = implode('|', $composite_keys);
+                            } else {
+                                $key = $row[$ubs_key] ?? '';
+                            }
+                            $allUbsKeys[$key] = true;
+                        }
+                        unset($allUbsKeysData);
+                        
+                        // Find missing records
+                        $remote_key = Converter::primaryKey($remote_table_name);
+                        $missing_records = [];
+                        foreach ($allRemoteData as $remote_row) {
+                            $remoteKey = $remote_row[$remote_key] ?? '';
+                            if (!isset($allUbsKeys[$remoteKey])) {
+                                $missing_records[] = $remote_row;
+                            }
+                        }
+                        
+                        if (!empty($missing_records)) {
+                            ProgressDisplay::info("📦 Found " . count($missing_records) . " remote records missing in local (regardless of timestamp)");
+                            $comparedData = syncEntity($ubs_table, [], $missing_records);
+                            $ubs_data_to_upsert = $comparedData['ubs_data'];
+                            
+                            if (!empty($ubs_data_to_upsert)) {
+                                executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert) {
+                                    ProgressDisplay::info("⬇️ Syncing " . count($ubs_data_to_upsert) . " missing remote records to local UBS");
+                                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                                }, true);
+                            }
+                        }
+                        unset($allUbsKeys, $missing_records, $allRemoteData);
+                    }
+                } catch (Exception $e) {
+                    ProgressDisplay::warning("⚠️  Could not check for all remote records: " . $e->getMessage());
+                }
             }
             
             // Process UBS data in chunks if it exists

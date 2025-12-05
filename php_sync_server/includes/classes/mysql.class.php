@@ -339,8 +339,21 @@ class mysql
 		$result = mysqli_query($this->con, $sql);
 		
 		if (mysqli_error($this->con)) {
-			dump("MYSQL ERROR BULK UPSERT: " . mysqli_error($this->con));
+			$error = mysqli_error($this->con);
+			dump("MYSQL ERROR BULK UPSERT: " . $error);
 			dump($sql);
+			throw new Exception("MySQL bulk upsert error: $error");
+		}
+		
+		if (!$result) {
+			$error = mysqli_error($this->con) ?: "Unknown error";
+			throw new Exception("MySQL bulk upsert failed: $error");
+		}
+		
+		$affectedRows = mysqli_affected_rows($this->con);
+		if ($affectedRows === 0 && count($records) > 0) {
+			// Warning: No rows affected but we tried to insert
+			dump("WARNING: bulkUpsert executed but 0 rows affected for table $table_name");
 		}
 		
 		return $result;

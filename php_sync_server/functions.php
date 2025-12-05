@@ -558,14 +558,63 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         }
         
         if (!empty($localRecords)) {
+            // Debug: Show first record structure
+            ProgressDisplay::info("📋 First record keys: " . implode(', ', array_keys($localRecords[0])));
+            ProgressDisplay::info("📋 Primary key field: " . (is_array($keyField) ? implode(',', $keyField) : $keyField));
+            
             // Use bulk upsert for local MySQL
             $db_local->bulkUpsert($table, $localRecords, $keyField);
-            ProgressDisplay::info("✅ Updated local MySQL for $table");
+            
+            // Verify the insert by checking record count
+            $verifySql = "SELECT COUNT(*) as count FROM `$table`";
+            if (is_array($keyField)) {
+                // For composite keys, check if any of the records exist
+                $keyConditions = [];
+                foreach ($localRecords as $rec) {
+                    $conditions = [];
+                    foreach ($keyField as $k) {
+                        $val = $rec[$k] ?? null;
+                        if ($val !== null) {
+                            $val = $db_local->escape($val);
+                            $conditions[] = "`$k` = '$val'";
+                        }
+                    }
+                    if (!empty($conditions)) {
+                        $keyConditions[] = '(' . implode(' AND ', $conditions) . ')';
+                    }
+                }
+                if (!empty($keyConditions)) {
+                    $verifySql = "SELECT COUNT(*) as count FROM `$table` WHERE " . implode(' OR ', array_slice($keyConditions, 0, 1));
+                }
+            } else {
+                $firstKey = $localRecords[0][$keyField] ?? null;
+                if ($firstKey !== null) {
+                    $firstKey = $db_local->escape($firstKey);
+                    $verifySql = "SELECT COUNT(*) as count FROM `$table` WHERE `$keyField` = '$firstKey'";
+                }
+            }
+            
+            $verifyResult = $db_local->first($verifySql);
+            $verifyCount = $verifyResult['count'] ?? 0;
+            
+            if ($verifyCount > 0) {
+                ProgressDisplay::info("✅ Updated local MySQL for $table (verified: $verifyCount record(s) found)");
+            } else {
+                ProgressDisplay::warning("⚠️  Local MySQL update completed but verification failed - record not found in table");
+                ProgressDisplay::warning("⚠️  Table: $table, Key: " . (is_array($keyField) ? implode(',', $keyField) : $keyField));
+            }
+        } else {
+            ProgressDisplay::warning("⚠️  No local records to update (empty array)");
         }
     } catch (Exception $e) {
         // Log error but don't fail the entire sync
-        ProgressDisplay::warning("⚠️  Failed to update local MySQL for $table: " . $e->getMessage());
+        ProgressDisplay::error("❌ Failed to update local MySQL for $table: " . $e->getMessage());
+        ProgressDisplay::error("❌ Stack trace: " . $e->getTraceAsString());
         ProgressDisplay::warning("UBS update succeeded, but local MySQL was not updated. This may cause issues on next sync.");
+    } catch (Throwable $e) {
+        // Catch any other errors
+        ProgressDisplay::error("❌ Fatal error updating local MySQL for $table: " . $e->getMessage());
+        ProgressDisplay::error("❌ Stack trace: " . $e->getTraceAsString());
     }
 
     ProgressDisplay::info("Completed batch upsert for UBS $table_name");
@@ -803,13 +852,18 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
         SELECT * FROM $alias_table WHERE $column_updated_at > '$updatedAfter'
     ";
 
-    // Debug information - suppressed for cleaner output
-    // dump("fetchServerData Debug:");
-    // dump("  Table: $table");
-    // dump("  Remote table: $alias_table");
-    // dump("  Updated column: $column_updated_at");
-    // dump("  Updated after: $updatedAfter");
-    // dump("  SQL: $sql");
+    // Debug information for troubleshooting
+    dump("fetchServerData Debug:");
+    dump("  Table: $table");
+    dump("  Remote table: $alias_table");
+    dump("  Updated column: $column_updated_at");
+    dump("  Updated after: $updatedAfter");
+    dump("  SQL: $sql");
+    
+    // Also check what the actual max date is in the remote table
+    $maxDateSql = "SELECT MAX($column_updated_at) as max_date, COUNT(*) as total FROM $alias_table";
+    $maxDateResult = $db->first($maxDateSql);
+    dump("  Remote table stats - Total records: " . ($maxDateResult['total'] ?? 0) . ", Max date: " . ($maxDateResult['max_date'] ?? 'NULL'));
 
     // Log memory usage before fetching - suppressed
     // $memoryBefore = getMemoryUsage();
