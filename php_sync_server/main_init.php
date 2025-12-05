@@ -8,10 +8,27 @@ include(__DIR__ . '/bootstrap/cache.php');
 
 // Initialize sync environment and progress display
 initializeSyncEnvironment();
-ProgressDisplay::start("🚀 Starting UBS Local Connector Sync Process");
+ProgressDisplay::start("🚀 Starting UBS Local Connector Initial Sync Process");
 
+// Check if Python sync is running
+if (isSyncRunning('python')) {
+    ProgressDisplay::error("❌ Python sync is currently running. Please wait for it to complete.");
+    exit(1);
+}
 
-$db = new mysql();
+// Acquire PHP sync lock
+if (!acquireSyncLock('php')) {
+    ProgressDisplay::error("❌ PHP sync is already running or lock file exists. Please check and remove lock file if needed.");
+    exit(1);
+}
+
+// Register shutdown function to release lock
+register_shutdown_function(function() {
+    releaseSyncLock('php');
+});
+
+try {
+    $db = new mysql();
 $last_synced_at = "1970-01-01 00:00:0"; // Set to null for FULL SYNC (process all records)
 
 $ubsTables = Converter::ubsTable();
@@ -99,3 +116,6 @@ foreach ($ubsTables as $ubs_table) {
 $db->insert('sync_logs', [
     'synced_at' => date('Y-m-d H:i:s')
 ]);
+
+// Release lock
+releaseSyncLock('php');

@@ -33,3 +33,7 @@ coverage/
 .DS_Store
 php_sync_server/dbf_scripts
 __pycache__
+# Lock files
+php_sync_server/locks/
+*.lock
+*.pid

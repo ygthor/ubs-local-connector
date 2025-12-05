@@ -1,15 +1,38 @@
 from utils import read_dbf, sync_to_server, test_server_response
 from sync_database import create_sync_logs_table, sync_to_database
+from sync_lock import acquire_sync_lock, release_sync_lock, is_sync_running
 import os
+import sys
 import time
+import atexit
 
 
 def main():
+    # Check if PHP sync is running
+    if is_sync_running('php'):
+        print("❌ PHP sync is currently running. Please wait for it to complete.")
+        sys.exit(1)
+    
+    # Acquire Python sync lock
+    if not acquire_sync_lock('python'):
+        print("❌ Python sync is already running or lock file exists. Please check and remove lock file if needed.")
+        sys.exit(1)
+    
+    # Register cleanup function to release lock on exit
+    atexit.register(lambda: release_sync_lock('python'))
+    
+    try:
+        create_sync_logs_table()
 
-    create_sync_logs_table()
-
-    # test_server_response()
-    sync_all()
+        # test_server_response()
+        sync_all()
+    except Exception as e:
+        print(f"❌ Sync failed: {e}")
+        release_sync_lock('python')
+        sys.exit(1)
+    finally:
+        # Ensure lock is released
+        release_sync_lock('python')
 
     # while True:
     #     # Call your function or logic here
@@ -38,6 +61,7 @@ def sync_all():
         ],
         "UBSSTK2015": [
             "icitem",
+            "icgroup",
             "artran",
             "ictran",
             "arpso",

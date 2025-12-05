@@ -218,12 +218,14 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         return;
     }
 
-    $db = new mysql();
-    $db->connect_remote();
+    // ✅ SAFE: Use retry logic for reliability
+    retryOperation(function() use ($table, $records, $batchSize) {
+        $db = new mysql();
+        $db->connect_remote();
 
-    $remote_table_name = Converter::table_convert_remote($table);
-    $primary_key = Converter::primaryKey($remote_table_name);
-    $Core = Core::getInstance();
+        $remote_table_name = Converter::table_convert_remote($table);
+        $primary_key = Converter::primaryKey($remote_table_name);
+        $Core = Core::getInstance();
 
     $totalRecords = count($records);
     $processed = 0;
@@ -274,7 +276,9 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         }
     }
 
-    ProgressDisplay::info("Completed high-performance batch upsert for $remote_table_name");
+        ProgressDisplay::info("Completed high-performance batch upsert for $remote_table_name");
+        return true; // Success
+    }, 3); // Max 3 retries
 }
 
 function batchUpsertUbs($table, $records, $batchSize = 500)
@@ -535,6 +539,35 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         }
     }
 
+    // ✅ Also update local MySQL to keep it in sync
+    // This ensures that when PHP sync updates UBS, local MySQL is also updated
+    // This prevents issues when re-syncing
+    try {
+        ProgressDisplay::info("Updating local MySQL for $table ($totalRecords records)");
+        $db_local = new mysql(); // Connects to local database by default
+        
+        // Convert records back to local MySQL format if needed
+        // The records are already in UBS format, so we can use them directly
+        $localRecords = [];
+        foreach ($records as $record) {
+            // Ensure UPDATED_ON is set to current time if updating
+            if (!isset($record['UPDATED_ON']) || empty($record['UPDATED_ON'])) {
+                $record['UPDATED_ON'] = date('Y-m-d H:i:s');
+            }
+            $localRecords[] = $record;
+        }
+        
+        if (!empty($localRecords)) {
+            // Use bulk upsert for local MySQL
+            $db_local->bulkUpsert($table, $localRecords, $keyField);
+            ProgressDisplay::info("✅ Updated local MySQL for $table");
+        }
+    } catch (Exception $e) {
+        // Log error but don't fail the entire sync
+        ProgressDisplay::warning("⚠️  Failed to update local MySQL for $table: " . $e->getMessage());
+        ProgressDisplay::warning("UBS update succeeded, but local MySQL was not updated. This may cause issues on next sync.");
+    }
+
     ProgressDisplay::info("Completed batch upsert for UBS $table_name");
 }
 
@@ -767,7 +800,7 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
     $column_updated_at = Converter::mapUpdatedAtField($alias_table);
 
     $sql = "
-        SELECT * FROM $alias_table WHERE $column_updated_at >= '$updatedAfter'
+        SELECT * FROM $alias_table WHERE $column_updated_at > '$updatedAfter'
     ";
 
     // Debug information - suppressed for cleaner output
@@ -946,7 +979,8 @@ function syncEntity($entity, $ubs_data, $remote_data)
             $ubs_updated_on = $ubs['UPDATED_ON'] ?? null;
             $remote_updated_on = $remote[$column_updated_at] ?? null;
 
-            // Validate UPDATED_ON fields and convert invalid ones to current date
+            // Validate UPDATED_ON fields and convert invalid ones to a consistent fallback
+            // Use 1970-01-01 for both to ensure consistent comparison when timestamps are invalid
             if (
                 empty($ubs_updated_on) ||
                 $ubs_updated_on === '0000-00-00' ||
@@ -954,7 +988,7 @@ function syncEntity($entity, $ubs_data, $remote_data)
                 strtotime($ubs_updated_on) === false
             ) {
                 $ubs_updated_on = '1970-01-01 00:00:00';
-                // dump("Warning: Invalid UPDATED_ON in UBS data: '{$ubs['UPDATED_ON']}' - Using current date: $ubs_updated_on");
+                // dump("Warning: Invalid UPDATED_ON in UBS data: '{$ubs['UPDATED_ON']}' - Using fallback: $ubs_updated_on");
             }
 
             if (
@@ -963,8 +997,8 @@ function syncEntity($entity, $ubs_data, $remote_data)
                 $remote_updated_on === '0000-00-00 00:00:00' ||
                 strtotime($remote_updated_on) === false
             ) {
-                $remote_updated_on = date('Y-m-d H:i:s');
-                // dump("Warning: Invalid UPDATED_ON in remote data: '{$remote[$column_updated_at]}' - Using current date: $remote_updated_on");
+                $remote_updated_on = '1970-01-01 00:00:00';
+                // dump("Warning: Invalid UPDATED_ON in remote data: '{$remote[$column_updated_at]}' - Using fallback: $remote_updated_on");
             }
 
             $ubs_time = strtotime($ubs_updated_on);
@@ -974,6 +1008,10 @@ function syncEntity($entity, $ubs_data, $remote_data)
                 $sync['remote_data'][] = convert($remote_table_name, $ubs, 'to_remote');
             } elseif ($remote_time > $ubs_time) {
                 $sync['ubs_data'][] = convert($remote_table_name, $remote, 'to_ubs');
+            } elseif ($ubs_time == $remote_time) {
+                // ✅ SAFE: Log conflicts when timestamps are equal
+                logSyncConflict($entity, $key, $ubs_updated_on, $remote_updated_on);
+                // No sync needed - both are already in sync
             }
         }
     }

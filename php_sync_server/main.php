@@ -9,6 +9,23 @@ include(__DIR__ . '/bootstrap/cache.php');
 initializeSyncEnvironment();
 ProgressDisplay::start("🚀 Starting UBS Local Connector Sync Process");
 
+// Check if Python sync is running
+if (isSyncRunning('python')) {
+    ProgressDisplay::error("❌ Python sync is currently running. Please wait for it to complete.");
+    exit(1);
+}
+
+// Acquire PHP sync lock
+if (!acquireSyncLock('php')) {
+    ProgressDisplay::error("❌ PHP sync is already running or lock file exists. Please check and remove lock file if needed.");
+    exit(1);
+}
+
+// Register shutdown function to release lock
+register_shutdown_function(function() {
+    releaseSyncLock('php');
+});
+
 try {
     $db = new mysql();
     
@@ -51,6 +68,20 @@ try {
         
         $processedTables++;
         ProgressDisplay::info("📁 Processing table $processedTables/$totalTables: $ubs_table");
+        
+        // ✅ SAFE: Verify indexes exist (read-only check)
+        try {
+            $indexStatus = verifySyncIndexes($ubs_table, 'local');
+            if (!$indexStatus['has_updated_on_index']) {
+                ProgressDisplay::warning("⚠️  No index on UPDATED_ON for $ubs_table - sync may be slower");
+            }
+            if (!$indexStatus['has_primary_key']) {
+                ProgressDisplay::warning("⚠️  No primary key on $ubs_table - this may cause issues");
+            }
+        } catch (Exception $e) {
+            // Safe: Continue even if index check fails
+            ProgressDisplay::warning("Could not verify indexes for $ubs_table: " . $e->getMessage());
+        }
         
         try {
             // ProgressDisplay::info("🔍 Inside try block for $ubs_table");
@@ -142,15 +173,20 @@ try {
                 $remote_data_to_upsert = $comparedData['remote_data'];
                 $ubs_data_to_upsert = $comparedData['ubs_data'];
                 
+                // ✅ SAFE: Use transaction wrapper for data integrity
                 // Use batch processing for better performance
-                if (!empty($remote_data_to_upsert)) {
-                    ProgressDisplay::info("Upserting " . count($remote_data_to_upsert) . " remote records");
-                    batchUpsertRemote($ubs_table, $remote_data_to_upsert);
-                }
+                if (!empty($remote_data_to_upsert) || !empty($ubs_data_to_upsert)) {
+                    executeSyncWithTransaction(function() use ($ubs_table, $remote_data_to_upsert, $ubs_data_to_upsert) {
+                        if (!empty($remote_data_to_upsert)) {
+                            ProgressDisplay::info("Upserting " . count($remote_data_to_upsert) . " remote records");
+                            batchUpsertRemote($ubs_table, $remote_data_to_upsert);
+                        }
 
-                if (!empty($ubs_data_to_upsert)) {
-                    ProgressDisplay::info("Upserting " . count($ubs_data_to_upsert) . " UBS records");
-                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                        if (!empty($ubs_data_to_upsert)) {
+                            ProgressDisplay::info("Upserting " . count($ubs_data_to_upsert) . " UBS records");
+                            batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                        }
+                    }, true); // Use transactions
                 }
                 
                 $processedRecords += count($ubs_data);
@@ -273,5 +309,9 @@ try {
     
 } catch (Exception $e) {
     ProgressDisplay::error("Sync process failed: " . $e->getMessage());
+    releaseSyncLock('php');
     exit(1);
+} finally {
+    // Ensure lock is released
+    releaseSyncLock('php');
 }

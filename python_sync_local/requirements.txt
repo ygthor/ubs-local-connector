@@ -1,0 +1,6 @@
+dbfread
+requests
+python-dotenv
+psutil
+mysql-connector-python
+pymysql

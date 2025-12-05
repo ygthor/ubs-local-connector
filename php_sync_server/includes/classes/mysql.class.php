@@ -4,6 +4,8 @@ if (!isset($_SESSION)) session_start();
 class mysql
 {
 	protected $con;
+	protected $in_transaction = false; // Track transaction state
+	
 	public function __construct()
 	{
 		$this->connect();
@@ -342,5 +344,29 @@ class mysql
 		}
 		
 		return $result;
+	}
+
+	// ✅ SAFE: Transaction support for data integrity
+	function beginTransaction()
+	{
+		$this->in_transaction = true;
+		return mysqli_begin_transaction($this->con);
+	}
+
+	function commit()
+	{
+		$this->in_transaction = false;
+		return mysqli_commit($this->con);
+	}
+
+	function rollback()
+	{
+		$this->in_transaction = false;
+		return mysqli_rollback($this->con);
+	}
+
+	function inTransaction()
+	{
+		return $this->in_transaction === true;
 	}
 }

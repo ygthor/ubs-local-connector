@@ -31,7 +31,8 @@ class Converter
             // 'ubs_ubsstk2015_arcust',
             // 'ubs_ubsstk2015_apvend',
             // 'ubs_ubsstk2015_icarea',
-            // 'ubs_ubsstk2015_icitem',
+            'ubs_ubsstk2015_icitem', // product/item
+            'ubs_ubsstk2015_icgroup', // product group
             // 'ubs_ubsstk2015_ictran',
 
             
@@ -62,7 +63,8 @@ class Converter
                 'ITEMCOUNT'
             ],
 
-            
+            'ubs_ubsstk2015_icitem' => 'ITEMNO',
+            'ubs_ubsstk2015_icgroup' => 'name',
 
 
             'customers' => 'customer_code',
@@ -71,6 +73,8 @@ class Converter
             'artrans' => 'REFNO',
             'artrans_items' => 'unique_key',
             'gldata' => 'ACCNO',
+            'icitem' => 'ITEMNO',
+            'icgroup' => 'name',
             
         ];
 
@@ -95,6 +99,8 @@ class Converter
             'ubs_ubsstk2015_artran' => 'artrans',
             'ubs_ubsstk2015_ictran' => 'artrans_items',
             'ubs_ubsacc2015_gldata' => 'gldata',
+            'ubs_ubsstk2015_icitem' => 'icitem',
+            'ubs_ubsstk2015_icgroup' => 'icgroup',
         ];
 
         return $maps;
@@ -209,6 +215,8 @@ class Converter
             'artrans' => 'UPDATED_ON',
             'artrans_items' => 'UPDATED_ON',
             'gldata' => 'UPDATED_ON',
+            'icitem' => 'UPDATED_ON',
+            'icgroup' => 'UPDATED_ON',
         ];
 
         return $maps[$remote_table] ?? 'updated_at'; // default
