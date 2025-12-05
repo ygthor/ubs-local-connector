@@ -32,7 +32,7 @@ class Converter
             // 'ubs_ubsstk2015_apvend',
             // 'ubs_ubsstk2015_icarea',
             'ubs_ubsstk2015_icitem', // product/item
-            'ubs_ubsstk2015_icgroup', // product group
+            // 'ubs_ubsstk2015_icgroup', // product group - NOT A TABLE, generated from icitem GROUP values
             // 'ubs_ubsstk2015_ictran',
 
             
