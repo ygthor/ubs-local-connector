@@ -139,6 +139,68 @@ try {
             $iterationCount = 0;
             
             
+            // ✅ Process remote-only records first (records that exist in remote but not in local UBS)
+            // This ensures we sync missing records from remote to local
+            if ($remoteCount > 0 && $ubsCount > 0) {
+                ProgressDisplay::info("🔍 Checking for remote-only records (missing in local UBS)...");
+                
+                // Get all UBS keys that exist (to compare with remote)
+                // Only fetch keys, not full records, to save memory
+                $allUbsKeys = [];
+                $ubs_key = Converter::primaryKey($ubs_table);
+                $is_composite_key = is_array($ubs_key);
+                
+                // Build SQL to get only keys
+                if ($is_composite_key) {
+                    $keyColumns = array_map(function($k) { return "`$k`"; }, $ubs_key);
+                    $keySql = "SELECT " . implode(', ', $keyColumns) . " FROM `$ubs_table`";
+                } else {
+                    $keySql = "SELECT `$ubs_key` FROM `$ubs_table`";
+                }
+                
+                $allUbsKeysData = $db->get($keySql);
+                foreach ($allUbsKeysData as $row) {
+                    if ($is_composite_key) {
+                        $composite_keys = [];
+                        foreach ($ubs_key as $k) {
+                            $composite_keys[] = $row[$k] ?? '';
+                        }
+                        $key = implode('|', $composite_keys);
+                    } else {
+                        $key = $row[$ubs_key] ?? '';
+                    }
+                    $allUbsKeys[$key] = true;
+                }
+                unset($allUbsKeysData); // Free memory
+                
+                // Find remote records that don't exist in local UBS
+                $remote_key = Converter::primaryKey(Converter::table_convert_remote($ubs_table));
+                $remote_only_records = [];
+                foreach ($remote_data as $remote_row) {
+                    $remoteKey = $remote_row[$remote_key] ?? '';
+                    if (!isset($allUbsKeys[$remoteKey])) {
+                        // This remote record doesn't exist in local UBS - needs to be synced
+                        $remote_only_records[] = $remote_row;
+                    }
+                }
+                
+                if (!empty($remote_only_records)) {
+                    ProgressDisplay::info("📦 Found " . count($remote_only_records) . " remote-only records to sync to local UBS");
+                    $comparedData = syncEntity($ubs_table, [], $remote_only_records);
+                    $ubs_data_to_upsert = $comparedData['ubs_data'];
+                    
+                    if (!empty($ubs_data_to_upsert)) {
+                        executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert) {
+                            ProgressDisplay::info("⬇️ Syncing " . count($ubs_data_to_upsert) . " remote-only records to local UBS");
+                            batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                        }, true);
+                    }
+                } else {
+                    ProgressDisplay::info("✓ No remote-only records found (all remote records exist in local)");
+                }
+                unset($allUbsKeys, $remote_only_records); // Free memory
+            }
+            
             // Process UBS data in chunks if it exists
             // dd("$offset < $ubsCount && $iterationCount < $maxIterations");
             while ($offset < $ubsCount && $iterationCount < $maxIterations) {
@@ -250,6 +312,20 @@ try {
             ];
             
             ProgressDisplay::info("✅ Completed sync for $ubs_table (UBS: $ubsCount, Remote: $remoteCount, Processed: $processedRecords)");
+            
+            // ✅ Special handling: After syncing icitem, sync icgroup from icitem GROUP values
+            if ($ubs_table === 'ubs_ubsstk2015_icitem') {
+                ProgressDisplay::info("🔄 Syncing icgroup from icitem GROUP values...");
+                try {
+                    $db_remote = new mysql();
+                    $db_remote->connect_remote();
+                    syncIcgroupFromIcitem($db, $db_remote);
+                    $db_remote->close();
+                } catch (Exception $e) {
+                    ProgressDisplay::warning("⚠️  Failed to sync icgroup from icitem: " . $e->getMessage());
+                    // Don't fail the entire sync if icgroup sync fails
+                }
+            }
             
             // Complete cache for this table
             completeSyncCache();
