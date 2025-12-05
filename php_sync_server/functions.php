@@ -1473,3 +1473,221 @@ function attemptDbfRepair($filePath)
         return false;
     }
 }
+
+/**
+ * Sync icgroup table from icitem GROUP values
+ * Truncates icgroup and re-inserts based on unique GROUP values from icitem
+ * 
+ * @param mysql $db_local Local database connection
+ * @param mysql $db_remote Remote database connection
+ */
+function syncIcgroupFromIcitem($db_local, $db_remote)
+{
+    try {
+        // Truncate icgroup table first
+        ProgressDisplay::info("🗑️  Truncating icgroup table...");
+        $db_remote->query("TRUNCATE icgroup");
+        
+        // Get unique GROUP values from icitem (remote table after sync)
+        // Try different possible field names: GROUP, group, GROUP_NAME, etc.
+        ProgressDisplay::info("📊 Extracting unique GROUP values from icitem...");
+        
+        // First, check what columns exist in icitem
+        $columnsCheck = $db_remote->get("SHOW COLUMNS FROM icitem LIKE '%GROUP%'");
+        $groupColumn = 'GROUP'; // default
+        
+        if (!empty($columnsCheck)) {
+            // Use the first GROUP-related column found
+            $groupColumn = $columnsCheck[0]['Field'];
+        } else {
+            // Try common variations
+            $possibleColumns = ['GROUP', 'group', 'GROUP_NAME', 'group_name', 'GROUPCODE', 'groupcode'];
+            foreach ($possibleColumns as $col) {
+                $test = $db_remote->get("SHOW COLUMNS FROM icitem LIKE '$col'");
+                if (!empty($test)) {
+                    $groupColumn = $col;
+                    break;
+                }
+            }
+        }
+        
+        ProgressDisplay::info("Using column: $groupColumn for group extraction");
+        
+        $sql = "SELECT DISTINCT `$groupColumn` as group_name FROM icitem WHERE `$groupColumn` IS NOT NULL AND `$groupColumn` != '' ORDER BY `$groupColumn`";
+        $groups = $db_remote->get($sql);
+        
+        if (empty($groups)) {
+            ProgressDisplay::info("⚠️  No GROUP values found in icitem table");
+            return;
+        }
+        
+        ProgressDisplay::info("📦 Found " . count($groups) . " unique groups to insert");
+        
+        // Prepare icgroup records
+        $icgroupRecords = [];
+        $currentTime = date('Y-m-d H:i:s');
+        
+        foreach ($groups as $group) {
+            $groupName = trim($group['group_name']);
+            if (empty($groupName)) {
+                continue;
+            }
+            
+            $icgroupRecords[] = [
+                'name' => $groupName,
+                'description' => null,
+                'CREATED_BY' => null,
+                'UPDATED_BY' => null,
+                'CREATED_ON' => $currentTime,
+                'UPDATED_ON' => $currentTime,
+                'created_at' => $currentTime,
+                'updated_at' => $currentTime,
+            ];
+        }
+        
+        // Batch insert icgroup records
+        if (!empty($icgroupRecords)) {
+            ProgressDisplay::info("⬆️  Inserting " . count($icgroupRecords) . " groups into icgroup...");
+            
+            $batchSize = 100;
+            for ($i = 0; $i < count($icgroupRecords); $i += $batchSize) {
+                $batch = array_slice($icgroupRecords, $i, $batchSize);
+                
+                foreach ($batch as $record) {
+                    $db_remote->insert('icgroup', $record);
+                }
+                
+                ProgressDisplay::info("  ✓ Inserted " . min($i + $batchSize, count($icgroupRecords)) . "/" . count($icgroupRecords) . " groups");
+            }
+            
+            ProgressDisplay::info("✅ Successfully synced " . count($icgroupRecords) . " groups to icgroup table");
+        }
+        
+    } catch (Exception $e) {
+        ProgressDisplay::error("❌ Error syncing icgroup from icitem: " . $e->getMessage());
+        // Don't throw - allow sync to continue even if icgroup sync fails
+    }
+}
+
+/**
+ * Truncate and sync only icitem and icgroup tables
+ * This function can be called independently to sync just these two tables
+ * 
+ * @param mysql|null $db_local Optional local database connection (creates new if not provided)
+ * @param mysql|null $db_remote Optional remote database connection (creates new if not provided)
+ * @return array Result with success status and counts
+ */
+function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
+{
+    $result = [
+        'success' => false,
+        'icitem_count' => 0,
+        'icgroup_count' => 0,
+        'error' => null
+    ];
+    
+    try {
+        // Create connections if not provided
+        if ($db_local === null) {
+            $db_local = new mysql();
+        }
+        
+        if ($db_remote === null) {
+            $db_remote = new mysql();
+            $db_remote->connect_remote();
+        }
+        
+        $ubs_table = 'ubs_ubsstk2015_icitem';
+        $remoteTable = 'icitem';
+        
+        ProgressDisplay::info("📁 Syncing icitem and icgroup tables only");
+        
+        // Step 1: Truncate icitem and icgroup
+        ProgressDisplay::info("🗑️  Truncating icitem table...");
+        $db_remote->query("TRUNCATE $remoteTable");
+        
+        ProgressDisplay::info("🗑️  Truncating icgroup table...");
+        $db_remote->query("TRUNCATE icgroup");
+        
+        // Step 2: Sync icitem from local to remote
+        ProgressDisplay::info("📊 Syncing icitem from local MySQL to remote MySQL...");
+        
+        // Count total rows to process
+        $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON IS NOT NULL";
+        $totalRows = $db_local->first($countSql)['total'] ?? 0;
+        
+        ProgressDisplay::info("Total icitem rows to process: $totalRows");
+        
+        $icitemCount = 0;
+        
+        if ($totalRows > 0) {
+            $chunkSize = 1000;
+            $offset = 0;
+            
+            while ($offset < $totalRows) {
+                ProgressDisplay::info("📦 Fetching chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
+                
+                // Fetch a chunk of data
+                $sql = "
+                    SELECT * FROM `$ubs_table`
+                    WHERE UPDATED_ON IS NOT NULL
+                    ORDER BY UPDATED_ON ASC
+                    LIMIT $chunkSize OFFSET $offset
+                ";
+                $ubs_data = $db_local->get($sql);
+                
+                if (empty($ubs_data)) {
+                    break; // No more data
+                }
+                
+                // Validate timestamps
+                $ubs_data = validateAndFixUpdatedOn($ubs_data);
+                
+                // Compare and prepare for sync
+                $comparedData = syncEntity($ubs_table, $ubs_data, []);
+                $remote_data_to_upsert = $comparedData['remote_data'];
+                
+                // Batch upsert to remote
+                if (!empty($remote_data_to_upsert)) {
+                    ProgressDisplay::info("⬆️ Upserting " . count($remote_data_to_upsert) . " icitem records...");
+                    batchUpsertRemote($ubs_table, $remote_data_to_upsert);
+                    $icitemCount += count($remote_data_to_upsert);
+                }
+                
+                // Free memory and move to next chunk
+                unset($ubs_data, $comparedData, $remote_data_to_upsert);
+                gc_collect_cycles();
+                
+                $offset += $chunkSize;
+                
+                // Small delay to avoid locking issues
+                usleep(300000); // 0.3s
+            }
+            
+            ProgressDisplay::info("✅ Finished syncing icitem ($icitemCount records)");
+        } else {
+            ProgressDisplay::info("⚠️  No icitem records to sync");
+        }
+        
+        // Step 3: Sync icgroup from icitem GROUP values
+        ProgressDisplay::info("🔄 Syncing icgroup from icitem GROUP values...");
+        syncIcgroupFromIcitem($db_local, $db_remote);
+        
+        // Get count of synced icgroup records
+        $icgroupCountResult = $db_remote->first("SELECT COUNT(*) as total FROM icgroup");
+        $icgroupCount = $icgroupCountResult['total'] ?? 0;
+        
+        $result['success'] = true;
+        $result['icitem_count'] = $icitemCount;
+        $result['icgroup_count'] = $icgroupCount;
+        
+        ProgressDisplay::info("✅ Successfully synced icitem ($icitemCount records) and icgroup ($icgroupCount records)");
+        
+    } catch (Exception $e) {
+        $result['error'] = $e->getMessage();
+        ProgressDisplay::error("❌ Error syncing icitem and icgroup: " . $e->getMessage());
+        throw $e;
+    }
+    
+    return $result;
+}
