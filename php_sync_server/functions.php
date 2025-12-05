@@ -547,14 +547,57 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         $db_local = new mysql(); // Connects to local database by default
         
         // Convert records back to local MySQL format if needed
-        // The records are already in UBS format, so we can use them directly
+        // The records are already in UBS format, but we need to exclude remote-only columns
+        // Remote-only columns are auto-increment IDs used by the remote PHP application
+        // but don't exist in local UBS MySQL tables
+        // Note: Case-sensitive matching - UBS uses uppercase, MySQL uses lowercase
+        $remoteOnlyColumns = [
+            'id',
+            'artrans_id',           // Remote primary key for artrans (local uses REFNO)
+            'artrans_items_id',     // Remote primary key for artrans_items (if exists)
+            'order_items_id',       // Remote primary key for order_items (if exists)
+        ];
+        
+        // Get actual columns that exist in local MySQL table to filter out non-existent columns
+        $db_local_check = new mysql();
+        $db_local_check->connect();
+        $tableColumns = [];
+        try {
+            $columnsResult = $db_local_check->query("SHOW COLUMNS FROM `$table`");
+            if ($columnsResult) {
+                while ($col = mysqli_fetch_assoc($columnsResult)) {
+                    $tableColumns[strtolower($col['Field'])] = true;
+                }
+            }
+        } catch (Exception $e) {
+            ProgressDisplay::warning("⚠️  Could not fetch table columns for $table: " . $e->getMessage());
+        }
+        $db_local_check->close();
+        
         $localRecords = [];
         foreach ($records as $record) {
-            // Ensure UPDATED_ON is set to current time if updating
-            if (!isset($record['UPDATED_ON']) || empty($record['UPDATED_ON'])) {
-                $record['UPDATED_ON'] = date('Y-m-d H:i:s');
+            // Filter out remote-only columns and columns that don't exist in local table
+            $filteredRecord = [];
+            foreach ($record as $key => $value) {
+                $keyLower = strtolower($key);
+                // Skip remote-only columns (case-sensitive match)
+                // Exclusion list uses lowercase, but UBS uses uppercase (ID, ARTRANS_ID)
+                // So we check lowercase version of key against lowercase exclusion list
+                if (in_array($keyLower, $remoteOnlyColumns)) {
+                    continue; // Explicitly excluded remote-only column
+                }
+                // Skip columns that don't exist in local table (safety check)
+                if (!empty($tableColumns) && !isset($tableColumns[$keyLower])) {
+                    continue; // Column doesn't exist in local table
+                }
+                $filteredRecord[$key] = $value;
             }
-            $localRecords[] = $record;
+            
+            // Ensure UPDATED_ON is set to current time if updating
+            if (!isset($filteredRecord['UPDATED_ON']) || empty($filteredRecord['UPDATED_ON'])) {
+                $filteredRecord['UPDATED_ON'] = date('Y-m-d H:i:s');
+            }
+            $localRecords[] = $filteredRecord;
         }
         
         if (!empty($localRecords)) {
