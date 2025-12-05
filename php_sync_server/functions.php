@@ -297,6 +297,9 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
     $processed = 0;
 
     ProgressDisplay::info("Starting batch upsert for UBS $table_name ($totalRecords records)");
+    
+    // ✅ Get primary key field name(s) for validation
+    $primaryKeyField = is_array($keyField) ? $keyField : [$keyField];
 
     // Check if file exists and is accessible
     if (!file_exists($path)) {
@@ -488,54 +491,133 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
 
     // Process inserts in batches
     if (!empty($insertRecords)) {
-        ProgressDisplay::info("Processing " . count($insertRecords) . " inserts for $table_name");
-
-        for ($i = 0; $i < count($insertRecords); $i += $batchSize) {
-            $batch = array_slice($insertRecords, $i, $batchSize);
-            $batchEditor = null;
-            $retryCount = 0;
-            
-            while ($retryCount < $maxRetries) {
-                try {
-                    $batchEditor = new \XBase\TableEditor($path, [
-                        'editMode' => $editMode,
-                    ]);
-
-                    foreach ($batch as $record) {
-                        insertUbsRecord($batchEditor, $record, $table_name);
+        // ✅ Validate primary key for all tables to prevent duplicates
+        // Get primary key field(s) - can be single field or composite key
+        $primaryKeyFields = is_array($keyField) ? $keyField : [$keyField];
+        $keyFieldNames = implode('+', $primaryKeyFields);
+        
+        ProgressDisplay::info("🔍 Validating $keyFieldNames for $table_name inserts to prevent duplicates...");
+        $existingKeys = [];
+        
+        try {
+            $checkEditor = new \XBase\TableReader($path);
+            while ($row = $checkEditor->nextRecord()) {
+                // Build composite key or single key
+                $keyParts = [];
+                foreach ($primaryKeyFields as $pkField) {
+                    $value = trim($row->get($pkField) ?? '');
+                    if (!empty($value)) {
+                        $keyParts[] = $value;
                     }
-
-                    if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
-                        $batchEditor->save();
-                    }
-                    $batchEditor->close();
-                    break; // Success
-                } catch (\Throwable $e) {
-                    $retryCount++;
-                    if ($batchEditor) {
-                        try {
-                            $batchEditor->close();
-                        } catch (\Throwable $closeError) {
-                            // Ignore close errors
-                        }
-                    }
-                    
-                    if ($retryCount >= $maxRetries) {
-                        if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
-                            ProgressDisplay::warning("Clone mode failed, trying realtime mode for batch insert");
-                            $editMode = \XBase\TableEditor::EDIT_MODE_REALTIME;
-                            $retryCount = 0;
-                            continue;
-                        } else {
-                            throw new Exception("Failed to insert batch in $table_name: " . $e->getMessage());
-                        }
-                    }
-                    usleep(100000 * $retryCount); // Exponential backoff
+                }
+                if (!empty($keyParts)) {
+                    $key = implode('|', $keyParts);
+                    $existingKeys[$key] = true;
                 }
             }
+            $checkEditor->close();
+        } catch (\Throwable $e) {
+            ProgressDisplay::warning("⚠️  Could not validate $keyFieldNames in UBS: " . $e->getMessage());
+        }
+        
+        // Filter out records with duplicate primary keys
+        $validInsertRecords = [];
+        $duplicateCount = 0;
+        $emptyKeyCount = 0;
+        
+        foreach ($insertRecords as $record) {
+            // Build key from record
+            $keyParts = [];
+            foreach ($primaryKeyFields as $pkField) {
+                $value = trim($record[$pkField] ?? '');
+                if (empty($value)) {
+                    break; // Skip if any part of key is empty
+                }
+                $keyParts[] = $value;
+            }
             
-            $processed += count($batch);
-            gc_collect_cycles();
+            if (count($keyParts) !== count($primaryKeyFields)) {
+                ProgressDisplay::warning("⚠️  Skipping record with empty/invalid $keyFieldNames");
+                $emptyKeyCount++;
+                continue;
+            }
+            
+            $key = implode('|', $keyParts);
+            if (isset($existingKeys[$key])) {
+                $keyDisplay = is_array($keyField) ? $keyFieldNames . " = " . implode('+', $keyParts) : "$keyFieldNames = $key";
+                ProgressDisplay::warning("⚠️  Skipping duplicate $keyFieldNames in UBS: $keyDisplay");
+                $duplicateCount++;
+                continue;
+            }
+            
+            $validInsertRecords[] = $record;
+            $existingKeys[$key] = true; // Track newly inserted keys in this batch
+        }
+        
+        if ($emptyKeyCount > 0) {
+            ProgressDisplay::info("⚠️  Filtered out $emptyKeyCount record(s) with empty/invalid $keyFieldNames");
+        }
+        if ($duplicateCount > 0) {
+            ProgressDisplay::info("⚠️  Filtered out $duplicateCount duplicate $keyFieldNames from UBS insert");
+        }
+        
+        $insertRecords = $validInsertRecords;
+        if (empty($insertRecords)) {
+            ProgressDisplay::info("⚠️  No valid records to insert into UBS after $keyFieldNames validation");
+        } else {
+            ProgressDisplay::info("✅ Validated " . count($insertRecords) . " records for UBS insert");
+        }
+        
+        if (!empty($insertRecords)) {
+            ProgressDisplay::info("Processing " . count($insertRecords) . " inserts for $table_name");
+
+            for ($i = 0; $i < count($insertRecords); $i += $batchSize) {
+                $batch = array_slice($insertRecords, $i, $batchSize);
+                $batchEditor = null;
+                $retryCount = 0;
+                
+                while ($retryCount < $maxRetries) {
+                    try {
+                        $batchEditor = new \XBase\TableEditor($path, [
+                            'editMode' => $editMode,
+                        ]);
+
+                        foreach ($batch as $record) {
+                            insertUbsRecord($batchEditor, $record, $table_name);
+                        }
+
+                        if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
+                            $batchEditor->save();
+                        }
+                        $batchEditor->close();
+                        break; // Success
+                    } catch (\Throwable $e) {
+                        $retryCount++;
+                        if ($batchEditor) {
+                            try {
+                                $batchEditor->close();
+                            } catch (\Throwable $closeError) {
+                                // Ignore close errors
+                            }
+                        }
+                        
+                        if ($retryCount >= $maxRetries) {
+                            if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
+                                ProgressDisplay::warning("Clone mode failed, trying realtime mode for batch insert");
+                                $editMode = \XBase\TableEditor::EDIT_MODE_REALTIME;
+                                $retryCount = 0;
+                                continue;
+                            } else {
+                                throw new Exception("Failed to insert batch in $table_name: " . $e->getMessage());
+                            }
+                        }
+                        usleep(100000 * $retryCount); // Exponential backoff
+                    }
+                }
+                
+                $processed += count($batch);
+                gc_collect_cycles();
+            }
         }
     }
 
@@ -601,12 +683,93 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         }
         
         if (!empty($localRecords)) {
-            // Debug: Show first record structure
-            ProgressDisplay::info("📋 First record keys: " . implode(', ', array_keys($localRecords[0])));
-            ProgressDisplay::info("📋 Primary key field: " . (is_array($keyField) ? implode(',', $keyField) : $keyField));
+            // ✅ Validate primary key for all tables to prevent duplicates in local MySQL
+            // Get primary key field(s) - can be single field or composite key
+            $primaryKeyFields = is_array($keyField) ? $keyField : [$keyField];
+            $keyFieldNames = implode('+', $primaryKeyFields);
             
-            // Use bulk upsert for local MySQL
-            $db_local->bulkUpsert($table, $localRecords, $keyField);
+            ProgressDisplay::info("🔍 Validating $keyFieldNames for local MySQL $table inserts to prevent duplicates...");
+            $existingKeys = [];
+            
+            try {
+                // Build SQL to get existing keys
+                $keyColumns = array_map(function($k) { return "`$k`"; }, $primaryKeyFields);
+                $keyCheckSql = "SELECT DISTINCT " . implode(', ', $keyColumns) . " FROM `$table`";
+                $keyResults = $db_local->get($keyCheckSql);
+                
+                foreach ($keyResults as $row) {
+                    $keyParts = [];
+                    foreach ($primaryKeyFields as $pkField) {
+                        $value = trim($row[$pkField] ?? '');
+                        if (!empty($value)) {
+                            $keyParts[] = $value;
+                        }
+                    }
+                    if (count($keyParts) === count($primaryKeyFields)) {
+                        $key = implode('|', $keyParts);
+                        $existingKeys[$key] = true;
+                    }
+                }
+            } catch (Exception $e) {
+                ProgressDisplay::warning("⚠️  Could not validate $keyFieldNames in local MySQL: " . $e->getMessage());
+            }
+            
+            // Filter out records with duplicate primary keys
+            $validLocalRecords = [];
+            $duplicateCount = 0;
+            $emptyKeyCount = 0;
+            
+            foreach ($localRecords as $record) {
+                // Build key from record
+                $keyParts = [];
+                foreach ($primaryKeyFields as $pkField) {
+                    $value = trim($record[$pkField] ?? '');
+                    if (empty($value)) {
+                        break; // Skip if any part of key is empty
+                    }
+                    $keyParts[] = $value;
+                }
+                
+                if (count($keyParts) !== count($primaryKeyFields)) {
+                    ProgressDisplay::warning("⚠️  Skipping record with empty/invalid $keyFieldNames in local MySQL");
+                    $emptyKeyCount++;
+                    continue;
+                }
+                
+                $key = implode('|', $keyParts);
+                if (isset($existingKeys[$key])) {
+                    $keyDisplay = is_array($keyField) ? $keyFieldNames . " = " . implode('+', $keyParts) : "$keyFieldNames = $key";
+                    ProgressDisplay::warning("⚠️  Skipping duplicate $keyFieldNames in local MySQL: $keyDisplay");
+                    $duplicateCount++;
+                    continue;
+                }
+                
+                $validLocalRecords[] = $record;
+                $existingKeys[$key] = true; // Track newly inserted keys in this batch
+            }
+            
+            if ($emptyKeyCount > 0) {
+                ProgressDisplay::info("⚠️  Filtered out $emptyKeyCount record(s) with empty/invalid $keyFieldNames from local MySQL");
+            }
+            if ($duplicateCount > 0) {
+                ProgressDisplay::info("⚠️  Filtered out $duplicateCount duplicate $keyFieldNames from local MySQL insert");
+            }
+            
+            $localRecords = $validLocalRecords;
+            if (empty($localRecords)) {
+                ProgressDisplay::info("⚠️  No valid records to insert into local MySQL after $keyFieldNames validation");
+            } else {
+                ProgressDisplay::info("✅ Validated " . count($localRecords) . " records for local MySQL insert");
+            }
+        }
+        
+        if (!empty($localRecords)) {
+                // Debug: Show first record structure
+                ProgressDisplay::info("📋 First record keys: " . implode(', ', array_keys($localRecords[0])));
+                ProgressDisplay::info("📋 Primary key field: " . (is_array($keyField) ? implode(',', $keyField) : $keyField));
+                
+                // Use bulk upsert for local MySQL
+                $db_local->bulkUpsert($table, $localRecords, $keyField);
             
             // Verify the insert by checking record count
             $verifySql = "SELECT COUNT(*) as count FROM `$table`";
