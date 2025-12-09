@@ -52,8 +52,18 @@ def sync_to_database(filename, data, directory):
             records_per_second = record_count / sync_time
             print(f"📊 Performance: {records_per_second:.0f} records/sec ({sync_time:.2f}s for {record_count} records)")
             
+    except mysql.connector.Error as e:
+        print(f"❌ MySQL Error syncing data: {e}")
+        print(f"   Error Code: {e.errno}")
+        print(f"   SQL State: {e.sqlstate}")
+        import traceback
+        traceback.print_exc()
+        raise
     except Exception as e:
-        print(f"Error syncing data: {e}")
+        print(f"❌ Error syncing data: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 def sync_to_mysql(table_name, structures, rows):
     """
@@ -64,14 +74,22 @@ def sync_to_mysql(table_name, structures, rows):
     max_retries = 3
     retry_count = 0
     
-    while retry_count < max_retries:
+        while retry_count < max_retries:
         try:
+            # Get connection parameters
+            db_host = os.getenv("DB_HOST", "localhost")
+            db_user = os.getenv("DB_USER", "root")
+            db_password = os.getenv("DB_PASSWORD", "")
+            db_name = os.getenv("DB_NAME", "your_database")
+            
+            print(f"🔌 Connecting to MySQL: {db_name} @ {db_host} (user: {db_user})")
+            
             # Optimize connection settings for bulk operations
             connection = mysql.connector.connect(
-                host=os.getenv("DB_HOST", "localhost"),
-                user=os.getenv("DB_USER", "root"),
-                password=os.getenv("DB_PASSWORD", ""),
-                database=os.getenv("DB_NAME", "your_database"),
+                host=db_host,
+                user=db_user,
+                password=db_password,
+                database=db_name,
                 autocommit=False,  # Disable autocommit for better performance
                 use_unicode=True,
                 charset='utf8mb4',
@@ -84,14 +102,26 @@ def sync_to_mysql(table_name, structures, rows):
                 init_command="SET SESSION sql_mode='NO_AUTO_VALUE_ON_ZERO'; SET SESSION wait_timeout=28800; SET SESSION interactive_timeout=28800;"
             )
             
+            # Verify connection is actually working
+            if not connection.is_connected():
+                raise mysql.connector.Error("Connection established but not connected")
+            
+            print(f"✅ MySQL connection verified and ready")
+            
             cursor = connection.cursor(buffered=True)
 
             try:
+                # Test connection with a simple query
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+                
                 # Set additional timeout settings to prevent connection drops
                 cursor.execute("SET SESSION wait_timeout = 28800")  # 8 hours
                 cursor.execute("SET SESSION interactive_timeout = 28800")  # 8 hours
                 cursor.execute("SET SESSION net_read_timeout = 600")  # 10 minutes
                 cursor.execute("SET SESSION net_write_timeout = 600")  # 10 minutes
+                
+                print(f"✅ MySQL session configured")
                 
                 # Truncate table to remove old data
                 cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
@@ -169,12 +199,24 @@ def sync_to_mysql(table_name, structures, rows):
             
         except mysql.connector.Error as e:
             retry_count += 1
+            print(f"❌ MySQL Error (attempt {retry_count}/{max_retries}): {e}")
+            print(f"   Error Code: {e.errno}")
+            print(f"   SQL State: {e.sqlstate}")
+            
             if "Lost connection" in str(e) and retry_count < max_retries:
                 print(f"⚠️  Connection lost, retrying ({retry_count}/{max_retries})...")
                 time.sleep(2)  # Wait before retry
                 continue
+            elif retry_count >= max_retries:
+                print(f"❌ Max retries reached. Connection failed.")
+                raise e
             else:
                 raise e
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+            import traceback
+            traceback.print_exc()
+            raise e
 
 def sync_to_sqlite(table_name, structures, rows):
     """
