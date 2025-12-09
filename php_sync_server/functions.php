@@ -1905,8 +1905,8 @@ function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
         // Step 2: Sync icitem from local to remote
         ProgressDisplay::info("📊 Syncing icitem from local MySQL to remote MySQL...");
         
-        // Count total rows to process
-        $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON IS NOT NULL";
+        // Count total rows to process (FORCE SYNC: Get ALL records including NULL UPDATED_ON)
+        $countSql = "SELECT COUNT(*) as total FROM `$ubs_table`";
         $totalRows = $db_local->first($countSql)['total'] ?? 0;
         
         ProgressDisplay::info("Total icitem rows to process: $totalRows");
@@ -1920,11 +1920,10 @@ function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
             while ($offset < $totalRows) {
                 ProgressDisplay::info("📦 Fetching chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
                 
-                // Fetch a chunk of data
+                // Fetch a chunk of data (FORCE SYNC: Get ALL records including NULL UPDATED_ON)
                 $sql = "
                     SELECT * FROM `$ubs_table`
-                    WHERE UPDATED_ON IS NOT NULL
-                    ORDER BY UPDATED_ON ASC
+                    ORDER BY COALESCE(UPDATED_ON, '1970-01-01') ASC
                     LIMIT $chunkSize OFFSET $offset
                 ";
                 $ubs_data = $db_local->get($sql);
@@ -1978,10 +1977,10 @@ function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
             ProgressDisplay::info("   Run: cd python_sync_local && python sync_icgroup.py");
             $icgroupTotalRows = 0;
         } else {
-            // Force sync: Get ALL records regardless of timestamp
-            $icgroupCountSql = "SELECT COUNT(*) as total FROM `$ubs_icgroup_table` WHERE UPDATED_ON IS NOT NULL";
+            // Force sync: Get ALL records regardless of timestamp or NULL values
+            $icgroupCountSql = "SELECT COUNT(*) as total FROM `$ubs_icgroup_table`";
             $icgroupTotalRows = $db_local->first($icgroupCountSql)['total'] ?? 0;
-            ProgressDisplay::info("🔄 FORCE SYNC: Syncing ALL icgroup records (ignoring timestamp)");
+            ProgressDisplay::info("🔄 FORCE SYNC: Syncing ALL icgroup records (including NULL UPDATED_ON)");
         }
         
         ProgressDisplay::info("Total icgroup rows to process: $icgroupTotalRows");
@@ -1995,11 +1994,10 @@ function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
             while ($offset < $icgroupTotalRows) {
                 ProgressDisplay::info("📦 Fetching icgroup chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
                 
-                // Fetch a chunk of data
+                // Fetch a chunk of data (FORCE SYNC: Get ALL records including NULL UPDATED_ON)
                 $sql = "
                     SELECT * FROM `$ubs_icgroup_table`
-                    WHERE UPDATED_ON IS NOT NULL
-                    ORDER BY UPDATED_ON ASC
+                    ORDER BY COALESCE(UPDATED_ON, '1970-01-01') ASC
                     LIMIT $chunkSize OFFSET $offset
                 ";
                 $icgroup_ubs_data = $db_local->get($sql);

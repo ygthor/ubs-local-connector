@@ -100,9 +100,9 @@ try {
                 }
                 
                 if ($isForceSync) {
-                    // Force sync: Get ALL records regardless of timestamp
-                    $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON IS NOT NULL";
-                    ProgressDisplay::info("🔄 FORCE SYNC: Syncing ALL records for $ubs_table (ignoring timestamp)");
+                    // Force sync: Get ALL records regardless of timestamp or NULL values
+                    $countSql = "SELECT COUNT(*) as total FROM `$ubs_table`";
+                    ProgressDisplay::info("🔄 FORCE SYNC: Syncing ALL records for $ubs_table (including NULL UPDATED_ON)");
                 } else {
                     // Normal sync: Only records updated after last sync
                     $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
@@ -308,11 +308,10 @@ try {
                 $iterationCount++;
                 
                 if ($isForceSync) {
-                    // Force sync: Get ALL records regardless of timestamp
+                    // Force sync: Get ALL records regardless of timestamp or NULL values
                     $sql = "
                         SELECT * FROM `$ubs_table` 
-                        WHERE UPDATED_ON IS NOT NULL
-                        ORDER BY UPDATED_ON ASC
+                        ORDER BY COALESCE(UPDATED_ON, '1970-01-01') ASC
                         LIMIT $chunkSize OFFSET $offset
                     ";
                 } else {
