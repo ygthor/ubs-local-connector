@@ -74,7 +74,7 @@ def sync_to_mysql(table_name, structures, rows):
     max_retries = 3
     retry_count = 0
     
-        while retry_count < max_retries:
+    while retry_count < max_retries:
         try:
             # Get connection parameters
             db_host = os.getenv("DB_HOST", "localhost")
