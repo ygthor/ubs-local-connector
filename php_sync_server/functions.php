@@ -1929,13 +1929,68 @@ function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
             ProgressDisplay::info("⚠️  No icitem records to sync");
         }
         
-        // Step 3: Sync icgroup from icitem GROUP values
-        ProgressDisplay::info("🔄 Syncing icgroup from icitem GROUP values...");
-        syncIcgroupFromIcitem($db_local, $db_remote);
+        // Step 3: Sync icgroup from DBF (local MySQL to remote MySQL)
+        $ubs_icgroup_table = 'ubs_ubsstk2015_icgroup';
+        $remoteIcgroupTable = 'icgroup';
         
-        // Get count of synced icgroup records
-        $icgroupCountResult = $db_remote->first("SELECT COUNT(*) as total FROM icgroup");
-        $icgroupCount = $icgroupCountResult['total'] ?? 0;
+        ProgressDisplay::info("📊 Syncing icgroup from local MySQL to remote MySQL...");
+        
+        // Count total rows to process
+        $icgroupCountSql = "SELECT COUNT(*) as total FROM `$ubs_icgroup_table` WHERE UPDATED_ON IS NOT NULL";
+        $icgroupTotalRows = $db_local->first($icgroupCountSql)['total'] ?? 0;
+        
+        ProgressDisplay::info("Total icgroup rows to process: $icgroupTotalRows");
+        
+        $icgroupCount = 0;
+        
+        if ($icgroupTotalRows > 0) {
+            $chunkSize = 1000;
+            $offset = 0;
+            
+            while ($offset < $icgroupTotalRows) {
+                ProgressDisplay::info("📦 Fetching icgroup chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
+                
+                // Fetch a chunk of data
+                $sql = "
+                    SELECT * FROM `$ubs_icgroup_table`
+                    WHERE UPDATED_ON IS NOT NULL
+                    ORDER BY UPDATED_ON ASC
+                    LIMIT $chunkSize OFFSET $offset
+                ";
+                $icgroup_ubs_data = $db_local->get($sql);
+                
+                if (empty($icgroup_ubs_data)) {
+                    break; // No more data
+                }
+                
+                // Validate timestamps
+                $icgroup_ubs_data = validateAndFixUpdatedOn($icgroup_ubs_data);
+                
+                // Compare and prepare for sync
+                $icgroup_comparedData = syncEntity($ubs_icgroup_table, $icgroup_ubs_data, []);
+                $icgroup_remote_data_to_upsert = $icgroup_comparedData['remote_data'];
+                
+                // Batch upsert to remote
+                if (!empty($icgroup_remote_data_to_upsert)) {
+                    ProgressDisplay::info("⬆️ Upserting " . count($icgroup_remote_data_to_upsert) . " icgroup records...");
+                    batchUpsertRemote($ubs_icgroup_table, $icgroup_remote_data_to_upsert);
+                    $icgroupCount += count($icgroup_remote_data_to_upsert);
+                }
+                
+                // Free memory and move to next chunk
+                unset($icgroup_ubs_data, $icgroup_comparedData, $icgroup_remote_data_to_upsert);
+                gc_collect_cycles();
+                
+                $offset += $chunkSize;
+                
+                // Small delay to avoid locking issues
+                usleep(300000); // 0.3s
+            }
+            
+            ProgressDisplay::info("✅ Finished syncing icgroup ($icgroupCount records)");
+        } else {
+            ProgressDisplay::info("⚠️  No icgroup records to sync");
+        }
         
         $result['success'] = true;
         $result['icitem_count'] = $icitemCount;
