@@ -1109,15 +1109,34 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
         return $dataRow; // no need convert
     }
 
-
-
-
+    // Apply explicit mappings
     foreach ($map as $ubs => $remote) {
         if ($direction === 'to_remote') {
-            $converted[$remote] = $ubs ? ($dataRow[$ubs] ?? null) : null;
+            // Skip null mappings (fields to ignore, like SALEC)
+            if ($remote !== null && $ubs !== null) {
+                $converted[$remote] = $dataRow[$ubs] ?? null;
+            }
         } else {
-            if ($ubs) {
+            if ($ubs && $remote) {
                 $converted[$ubs] = $dataRow[$remote] ?? null;
+            }
+        }
+    }
+    
+    // Auto-map: Include fields with identical names that aren't explicitly mapped
+    // This handles fields like CREATED_ON, UPDATED_ON that have same name in both tables
+    if ($direction === 'to_remote') {
+        $mappedUbsFields = array_keys($map);
+        $mappedRemoteFields = array_values(array_filter($map, function($v) { return $v !== null; }));
+        
+        foreach ($dataRow as $ubsField => $value) {
+            // Auto-map if: not in map, not already converted, and field name matches remote column naming
+            if (!in_array($ubsField, $mappedUbsFields) && !isset($converted[$ubsField])) {
+                // Common fields that should auto-map (same name in both tables)
+                $autoMapFields = ['CREATED_ON', 'UPDATED_ON', 'CREATED_BY', 'UPDATED_BY', 'id'];
+                if (in_array(strtoupper($ubsField), array_map('strtoupper', $autoMapFields))) {
+                    $converted[$ubsField] = $value;
+                }
             }
         }
     }

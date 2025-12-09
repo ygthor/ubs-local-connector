@@ -198,7 +198,14 @@ class Converter
 
             ],
 
-
+            'icgroup' => [
+                // UBS DBF => REMOTE TABLE
+                'GROUP' => 'name',           // Product group name
+                'DESP' => 'description',      // Product group description
+                'SALEC' => null,              // Skip SALEC (not in remote table)
+                'CREATED_ON' => 'CREATED_ON',
+                'UPDATED_ON' => 'UPDATED_ON',
+            ],
 
             // auto map if identical
 
