@@ -64,7 +64,7 @@ class Converter
             ],
 
             'ubs_ubsstk2015_icitem' => 'ITEMNO',
-            'ubs_ubsstk2015_icgroup' => 'name',
+            'ubs_ubsstk2015_icgroup' => 'GROUP',  // DBF field name, not remote field name
 
 
             'customers' => 'customer_code',

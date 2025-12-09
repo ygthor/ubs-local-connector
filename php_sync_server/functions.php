@@ -1232,7 +1232,18 @@ function syncEntity($entity, $ubs_data, $remote_data)
         } else {
             $key = $row[$ubs_key] ?? '';
         }
+        
+        // Debug: Log if key is empty (might indicate wrong primary key field)
+        if (empty($key) && $entity === 'ubs_ubsstk2015_icgroup') {
+            dump("⚠️  WARNING: Empty key for icgroup record. UBS key field: '$ubs_key', Available fields: " . implode(', ', array_keys($row)));
+        }
+        
         $ubs_keys[$key] = $row;
+    }
+    
+    // Debug: Log unique keys found
+    if ($entity === 'ubs_ubsstk2015_icgroup') {
+        dump("🔑 icgroup unique keys: " . count($ubs_keys) . " (keys: " . implode(', ', array_keys($ubs_keys)) . ")");
     }
 
     // Process remote data
