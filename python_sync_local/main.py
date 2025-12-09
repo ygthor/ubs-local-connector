@@ -123,5 +123,53 @@ def single_sync():
     sync_to_database(file_name, data, directory_name)
 
 
+def sync_icgroup_only():
+    """
+    Sync only icgroup.dbf from UBSSTK2015 directory to local MySQL
+    Creates/updates the ubs_ubsstk2015_icgroup table
+    """
+    start_time = time.time()
+    print("🚀 Starting icgroup DBF to MySQL sync...")
+    
+    directory_name = "UBSSTK2015"
+    dbf_subpath = os.getenv("DBF_SUBPATH", "Sample")
+    directory_path = f"C:/{directory_name}/{dbf_subpath}"
+    file_name = "icgroup.dbf"
+    full_path = os.path.join(directory_path, file_name)
+    
+    # Check if file exists
+    if not os.path.exists(full_path):
+        print(f"❌ File {full_path} not found!")
+        print(f"💡 Please check if the file exists at: {full_path}")
+        return False
+    
+    try:
+        print(f"📁 Processing {file_name}...")
+        
+        # Read DBF file
+        data = read_dbf(full_path)
+        
+        # Check if we got valid data
+        if not data or not data.get('structure') or not data.get('rows'):
+            print(f"⚠️  No data in {file_name}, skipping...")
+            return False
+        
+        # Sync to database
+        sync_to_database(file_name, data, directory_name)
+        
+        file_time = time.time() - start_time
+        record_count = len(data['rows']) if data.get('rows') else 0
+        print(f"✅ {file_name} completed in {file_time:.2f}s ({record_count} records)")
+        print(f"📊 Table 'ubs_ubsstk2015_icgroup' created/updated in local MySQL")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error processing {file_name}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 if __name__ == "__main__":
     main()
