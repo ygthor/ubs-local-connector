@@ -1054,16 +1054,19 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
     $alias_table = Converter::table_convert_remote($table);
     $column_updated_at = Converter::mapUpdatedAtField($alias_table);
 
-    $sql = "
-        SELECT * FROM $alias_table WHERE $column_updated_at > '$updatedAfter'
-    ";
+    // ✅ FORCE SYNC: If $updatedAfter is null, fetch ALL records
+    if ($updatedAfter === null) {
+        $sql = "SELECT * FROM $alias_table WHERE $column_updated_at IS NOT NULL";
+    } else {
+        $sql = "SELECT * FROM $alias_table WHERE $column_updated_at > '$updatedAfter'";
+    }
 
     // Debug information for troubleshooting
     dump("fetchServerData Debug:");
     dump("  Table: $table");
     dump("  Remote table: $alias_table");
     dump("  Updated column: $column_updated_at");
-    dump("  Updated after: $updatedAfter");
+    dump("  Updated after: " . ($updatedAfter === null ? 'NULL (FORCE SYNC - ALL RECORDS)' : $updatedAfter));
     dump("  SQL: $sql");
     
     // Also check what the actual max date is in the remote table
@@ -1935,9 +1938,21 @@ function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
         
         ProgressDisplay::info("📊 Syncing icgroup from local MySQL to remote MySQL...");
         
-        // Count total rows to process
-        $icgroupCountSql = "SELECT COUNT(*) as total FROM `$ubs_icgroup_table` WHERE UPDATED_ON IS NOT NULL";
-        $icgroupTotalRows = $db_local->first($icgroupCountSql)['total'] ?? 0;
+        // Check if table exists first
+        $tableCheckSql = "SHOW TABLES LIKE '$ubs_icgroup_table'";
+        $tableExists = $db_local->first($tableCheckSql);
+        
+        if (empty($tableExists)) {
+            ProgressDisplay::warning("⚠️  Table '$ubs_icgroup_table' does not exist in local database.");
+            ProgressDisplay::warning("💡 Please run Python sync first to create the table from icgroup.dbf");
+            ProgressDisplay::info("   Run: cd python_sync_local && python sync_icgroup.py");
+            $icgroupTotalRows = 0;
+        } else {
+            // Force sync: Get ALL records regardless of timestamp
+            $icgroupCountSql = "SELECT COUNT(*) as total FROM `$ubs_icgroup_table` WHERE UPDATED_ON IS NOT NULL";
+            $icgroupTotalRows = $db_local->first($icgroupCountSql)['total'] ?? 0;
+            ProgressDisplay::info("🔄 FORCE SYNC: Syncing ALL icgroup records (ignoring timestamp)");
+        }
         
         ProgressDisplay::info("Total icgroup rows to process: $icgroupTotalRows");
         

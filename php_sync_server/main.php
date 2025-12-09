@@ -85,8 +85,29 @@ try {
             
             // Get data counts first for better progress tracking
             
+            // ✅ FORCE SYNC: icitem and icgroup always sync all records regardless of timestamp
+            $forceSyncTables = ['ubs_ubsstk2015_icitem', 'ubs_ubsstk2015_icgroup'];
+            $isForceSync = in_array($ubs_table, $forceSyncTables);
+            
             try {
-                $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
+                // Check if table exists first
+                $tableCheckSql = "SHOW TABLES LIKE '$ubs_table'";
+                $tableExists = $db->first($tableCheckSql);
+                
+                if (empty($tableExists)) {
+                    ProgressDisplay::warning("⚠️  Table '$ubs_table' does not exist in local database. Skipping...");
+                    continue;
+                }
+                
+                if ($isForceSync) {
+                    // Force sync: Get ALL records regardless of timestamp
+                    $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON IS NOT NULL";
+                    ProgressDisplay::info("🔄 FORCE SYNC: Syncing ALL records for $ubs_table (ignoring timestamp)");
+                } else {
+                    // Normal sync: Only records updated after last sync
+                    $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
+                }
+                
                 $ubsCount = $db->first($countSql)['total'];
                 
                 // Debug: Check if table exists and has any records at all
@@ -100,10 +121,15 @@ try {
             }
             
             // Always fetch remote data to check for server-side updates
-            // ProgressDisplay::info("🔍 About to fetch remote data for $ubs_table");
+            // ✅ FORCE SYNC: For icitem and icgroup, fetch ALL remote records
             try {
-                ProgressDisplay::info("🔍 Fetching remote data for $ubs_table (updated after: $last_synced_at)");
-                $remote_data = fetchServerData($ubs_table, $last_synced_at);
+                if ($isForceSync) {
+                    ProgressDisplay::info("🔍 Fetching ALL remote data for $ubs_table (force sync - ignoring timestamp)");
+                    $remote_data = fetchServerData($ubs_table, null); // null = get all records
+                } else {
+                    ProgressDisplay::info("🔍 Fetching remote data for $ubs_table (updated after: $last_synced_at)");
+                    $remote_data = fetchServerData($ubs_table, $last_synced_at);
+                }
                 $remoteCount = count($remote_data);
                 ProgressDisplay::info("📊 Found $remoteCount remote records to compare for $ubs_table");
                 
@@ -276,17 +302,28 @@ try {
             }
             
             // Process UBS data in chunks if it exists
-            // dd("$offset < $ubsCount && $iterationCount < $maxIterations");
+            // ✅ FORCE SYNC: Use different WHERE clause for force sync tables
             while ($offset < $ubsCount && $iterationCount < $maxIterations) {
               
                 $iterationCount++;
-                $sql = "
-                    SELECT * FROM `$ubs_table` 
-                    WHERE UPDATED_ON > '$last_synced_at'
-                    
-                    ORDER BY UPDATED_ON ASC
-                    LIMIT $chunkSize OFFSET $offset
-                ";
+                
+                if ($isForceSync) {
+                    // Force sync: Get ALL records regardless of timestamp
+                    $sql = "
+                        SELECT * FROM `$ubs_table` 
+                        WHERE UPDATED_ON IS NOT NULL
+                        ORDER BY UPDATED_ON ASC
+                        LIMIT $chunkSize OFFSET $offset
+                    ";
+                } else {
+                    // Normal sync: Only records updated after last sync
+                    $sql = "
+                        SELECT * FROM `$ubs_table` 
+                        WHERE UPDATED_ON > '$last_synced_at'
+                        ORDER BY UPDATED_ON ASC
+                        LIMIT $chunkSize OFFSET $offset
+                    ";
+                }
                 
                 $ubs_data = $db->get($sql);
                 
@@ -388,22 +425,7 @@ try {
             ProgressDisplay::info("✅ Completed sync for $ubs_table (UBS: $ubsCount, Remote: $remoteCount, Processed: $processedRecords)");
             
             // ✅ NOTE: icgroup is now synced directly from icgroup.dbf (enabled in converter.class.php)
-            // The following generation logic is kept as fallback but commented out to avoid conflicts
-            // Uncomment if you need to generate icgroup from icitem GROUP values as a fallback
-            /*
-            if ($ubs_table === 'ubs_ubsstk2015_icitem') {
-                ProgressDisplay::info("🔄 Syncing icgroup from icitem GROUP values...");
-                try {
-                    $db_remote = new mysql();
-                    $db_remote->connect_remote();
-                    syncIcgroupFromIcitem($db, $db_remote);
-                    $db_remote->close();
-                } catch (Exception $e) {
-                    ProgressDisplay::warning("⚠️  Failed to sync icgroup from icitem: " . $e->getMessage());
-                    // Don't fail the entire sync if icgroup sync fails
-                }
-            }
-            */
+            // Both icitem and icgroup are force synced (all records) every time, regardless of timestamp
             
             // Complete cache for this table
             completeSyncCache();
