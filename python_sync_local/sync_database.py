@@ -94,12 +94,7 @@ def sync_to_mysql(table_name, structures, rows):
                 use_unicode=True,
                 charset='utf8mb4',
                 # Add timeout settings to prevent connection drops
-                connection_timeout=60,
-                # Optimize for bulk operations
-                sql_mode='NO_AUTO_VALUE_ON_ZERO',
-                # Prevent "Unread result found" errors
-                consume_results=True,
-                init_command="SET SESSION sql_mode='NO_AUTO_VALUE_ON_ZERO'; SET SESSION wait_timeout=28800; SET SESSION interactive_timeout=28800;"
+                connection_timeout=60
             )
             
             print(f"✅ MySQL connection established")
@@ -107,17 +102,11 @@ def sync_to_mysql(table_name, structures, rows):
             cursor = connection.cursor(buffered=True)
 
             try:
-                # Test connection with a simple query (this will fail if connection is bad)
-                cursor.execute("SELECT 1")
-                cursor.fetchone()
-                
                 # Set additional timeout settings to prevent connection drops
                 cursor.execute("SET SESSION wait_timeout = 28800")  # 8 hours
                 cursor.execute("SET SESSION interactive_timeout = 28800")  # 8 hours
                 cursor.execute("SET SESSION net_read_timeout = 600")  # 10 minutes
                 cursor.execute("SET SESSION net_write_timeout = 600")  # 10 minutes
-                
-                print(f"✅ MySQL session configured")
                 
                 # Truncate table to remove old data
                 cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
