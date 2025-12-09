@@ -102,16 +102,12 @@ def sync_to_mysql(table_name, structures, rows):
                 init_command="SET SESSION sql_mode='NO_AUTO_VALUE_ON_ZERO'; SET SESSION wait_timeout=28800; SET SESSION interactive_timeout=28800;"
             )
             
-            # Verify connection is actually working
-            if not connection.is_connected():
-                raise mysql.connector.Error("Connection established but not connected")
-            
-            print(f"✅ MySQL connection verified and ready")
+            print(f"✅ MySQL connection established")
             
             cursor = connection.cursor(buffered=True)
 
             try:
-                # Test connection with a simple query
+                # Test connection with a simple query (this will fail if connection is bad)
                 cursor.execute("SELECT 1")
                 cursor.fetchone()
                 
