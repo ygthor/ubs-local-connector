@@ -111,13 +111,17 @@ try {
 
         echo "✅ Finished processing $ubs_table\n";
         
-        // ✅ Special handling: After syncing icitem, sync icgroup from icitem GROUP values
+        // ✅ NOTE: icgroup is now synced directly from icgroup.dbf (enabled in converter.class.php)
+        // The following generation logic is kept as fallback but commented out to avoid conflicts
+        // Uncomment if you need to generate icgroup from icitem GROUP values as a fallback
+        /*
         if ($ubs_table === 'ubs_ubsstk2015_icitem') {
             ProgressDisplay::info("🔄 Syncing icgroup from icitem GROUP values...");
             // Ensure icgroup is truncated (already done above, but ensure it's done)
             $db_remote->query("TRUNCATE icgroup");
             syncIcgroupFromIcitem($db, $db_remote);
         }
+        */
         
         // Close remote connection for this table
         $db_remote->close();

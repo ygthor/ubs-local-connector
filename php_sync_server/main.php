@@ -387,7 +387,10 @@ try {
             
             ProgressDisplay::info("✅ Completed sync for $ubs_table (UBS: $ubsCount, Remote: $remoteCount, Processed: $processedRecords)");
             
-            // ✅ Special handling: After syncing icitem, sync icgroup from icitem GROUP values
+            // ✅ NOTE: icgroup is now synced directly from icgroup.dbf (enabled in converter.class.php)
+            // The following generation logic is kept as fallback but commented out to avoid conflicts
+            // Uncomment if you need to generate icgroup from icitem GROUP values as a fallback
+            /*
             if ($ubs_table === 'ubs_ubsstk2015_icitem') {
                 ProgressDisplay::info("🔄 Syncing icgroup from icitem GROUP values...");
                 try {
@@ -400,6 +403,7 @@ try {
                     // Don't fail the entire sync if icgroup sync fails
                 }
             }
+            */
             
             // Complete cache for this table
             completeSyncCache();
