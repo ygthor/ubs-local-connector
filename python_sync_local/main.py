@@ -128,8 +128,16 @@ def sync_icgroup_only():
     Sync only icgroup.dbf from UBSSTK2015 directory to local MySQL
     Creates/updates the ubs_ubsstk2015_icgroup table
     """
+    import mysql.connector
+    
     start_time = time.time()
     print("🚀 Starting icgroup DBF to MySQL sync...")
+    
+    # Show database connection info
+    db_host = os.getenv("DB_HOST", "localhost")
+    db_user = os.getenv("DB_USER", "root")
+    db_name = os.getenv("DB_NAME", "your_database")
+    print(f"📊 Database: {db_name} @ {db_host} (user: {db_user})")
     
     directory_name = "UBSSTK2015"
     dbf_subpath = os.getenv("DBF_SUBPATH", "Sample")
@@ -157,10 +165,41 @@ def sync_icgroup_only():
         # Sync to database
         sync_to_database(file_name, data, directory_name)
         
+        # Verify table was created
+        table_name = "ubs_ubsstk2015_icgroup"
+        try:
+            connection = mysql.connector.connect(
+                host=db_host,
+                user=db_user,
+                password=os.getenv("DB_PASSWORD", ""),
+                database=db_name
+            )
+            cursor = connection.cursor()
+            
+            # Check if table exists
+            cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
+            table_exists = cursor.fetchone()
+            
+            if table_exists:
+                # Get record count
+                cursor.execute(f"SELECT COUNT(*) FROM `{table_name}`")
+                count = cursor.fetchone()[0]
+                print(f"✅ Table '{table_name}' verified in database '{db_name}'")
+                print(f"📊 Record count: {count} records")
+            else:
+                print(f"⚠️  WARNING: Table '{table_name}' not found in database '{db_name}'")
+                print(f"💡 Please check if you're looking at the correct database")
+            
+            cursor.close()
+            connection.close()
+            
+        except Exception as verify_error:
+            print(f"⚠️  Could not verify table creation: {verify_error}")
+        
         file_time = time.time() - start_time
         record_count = len(data['rows']) if data.get('rows') else 0
         print(f"✅ {file_name} completed in {file_time:.2f}s ({record_count} records)")
-        print(f"📊 Table 'ubs_ubsstk2015_icgroup' created/updated in local MySQL")
+        print(f"📊 Table 'ubs_ubsstk2015_icgroup' created/updated in database '{db_name}'")
         
         return True
         
