@@ -35,9 +35,8 @@ class Core
         $data = $db->pluck($sql,'id','reference_no');
         $this->remote_order_lists = $data;
 
-        $sql = "SELECT artrans_id , REFNO FROM artrans";
-        $data = $db->pluck($sql,'artrans_id','REFNO');
-        $this->remote_artrans_lists = $data;
-
+        $sql = "SELECT id, receipt_no FROM receipts";
+        $data = $db->pluck($sql,'id','reference_no');
+        $this->remote_order_lists = $data;
     }
 }

@@ -64,8 +64,6 @@ def sync_all():
             "icgroup",
             "artran",
             "ictran",
-            "arpso",
-            "icpso",
         ],
     }
 

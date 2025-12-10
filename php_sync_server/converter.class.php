@@ -2,18 +2,10 @@
 
 class Converter
 {
-    public static $table_cloned_ubs = [
-        'artrans',
-        'artrans_items',
-        'gldata'
-    ];
-
     static function ubsTable()
     {
         $dbf_arr = [
             'ubs_ubsacc2015_arcust',
-            'ubs_ubsstk2015_arpso', // order
-            'ubs_ubsstk2015_icpso', // order item
             'ubs_ubsstk2015_artran', // invoice
             'ubs_ubsstk2015_ictran', // invoice item
             'ubs_ubsacc2015_gldata', // statement
@@ -49,13 +41,6 @@ class Converter
             'ubs_ubsacc2015_arpost' => 'ENTRY',
 
             'ubs_ubsacc2015_gldata' => 'ACCNO',
-            
-
-            'ubs_ubsstk2015_arpso' => 'REFNO',
-            'ubs_ubsstk2015_icpso' => [
-                'REFNO',
-                'ITEMCOUNT'
-            ],
 
             'ubs_ubsstk2015_artran' => 'REFNO',
             'ubs_ubsstk2015_ictran' => [
@@ -93,11 +78,9 @@ class Converter
     {
         $maps = [
             'ubs_ubsacc2015_arcust' => 'customers',
-            'ubs_ubsstk2015_arpso' => 'orders',
-            'ubs_ubsstk2015_icpso' => 'order_items',
 
-            'ubs_ubsstk2015_artran' => 'artrans',
-            'ubs_ubsstk2015_ictran' => 'artrans_items',
+            'ubs_ubsstk2015_artran' => 'orders',
+            'ubs_ubsstk2015_ictran' => 'order_items',
             'ubs_ubsacc2015_gldata' => 'gldata',
             'ubs_ubsstk2015_icitem' => 'icitem',
             'ubs_ubsstk2015_icgroup' => 'icgroup',
@@ -171,7 +154,7 @@ class Converter
 
             'order_items' => [
                 'TYPE' => 'orders|type',
-                'TRANCODE' => null,
+                'TRANCODE' => 'item_count',
                 'CUSTNO' => 'orders|customer_code',
                 'DATE' => 'orders|order_date',
                 // 'NAME ' => 'orders|customer_name',   

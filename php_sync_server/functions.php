@@ -255,6 +255,10 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
             $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
         }
 
+        // Remove CREATED_BY and UPDATED_BY fields that may not exist in remote tables
+        unset($record['CREATED_BY']);
+        unset($record['UPDATED_BY']);
+
         if (count($record) > 0) {
             $processedRecords[] = $record;
         }
@@ -1133,7 +1137,8 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             // Auto-map if: not in map, not already converted, and field name matches remote column naming
             if (!in_array($ubsField, $mappedUbsFields) && !isset($converted[$ubsField])) {
                 // Common fields that should auto-map (same name in both tables)
-                $autoMapFields = ['CREATED_ON', 'UPDATED_ON', 'CREATED_BY', 'UPDATED_BY', 'id'];
+                // Note: CREATED_BY and UPDATED_BY are excluded as they may not exist in all remote tables
+                $autoMapFields = ['CREATED_ON', 'UPDATED_ON', 'id'];
                 if (in_array(strtoupper($ubsField), array_map('strtoupper', $autoMapFields))) {
                     $converted[$ubsField] = $value;
                 }
