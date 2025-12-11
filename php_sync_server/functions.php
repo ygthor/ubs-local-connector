@@ -256,8 +256,11 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         }
 
         // Remove CREATED_BY and UPDATED_BY fields that may not exist in remote tables
+        // Check both uppercase and lowercase variations to be safe
         unset($record['CREATED_BY']);
         unset($record['UPDATED_BY']);
+        unset($record['created_by']);
+        unset($record['updated_by']);
 
         if (count($record) > 0) {
             $processedRecords[] = $record;
@@ -1161,6 +1164,13 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
     }
 
     if ($direction == 'to_remote') {
+        // Remove fields that should not be in remote tables
+        // These fields may exist in UBS but not in remote tables
+        $fieldsToRemove = ['CREATED_BY', 'UPDATED_BY', 'created_by', 'updated_by'];
+        foreach ($fieldsToRemove as $field) {
+            unset($converted[$field]);
+        }
+        
         foreach ($converted as $key => $val) {
             $check_table_link = strpos($key, '|');
             if ($check_table_link !== false || empty($key)) {
