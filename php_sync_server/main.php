@@ -41,6 +41,7 @@ try {
     if (empty($last_synced_at)) {
         $last_synced_at = '2025-08-01 00:00:00';
     }
+    // $last_synced_at = '2025-08-01 00:00:00';
     
     // ProgressDisplay::info("Last sync time: $last_synced_at");
     // ProgressDisplay::info("Memory limit set to: " . ini_get('memory_limit'));

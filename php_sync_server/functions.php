@@ -302,6 +302,9 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
     $keyField = Converter::primaryKey($table);
     $totalRecords = count($records);
     $processed = 0;
+    
+    // Track REFNOs for artran recalculation (only for ictran table)
+    $refNosToRecalculate = [];
 
     ProgressDisplay::info("Starting batch upsert for UBS $table_name ($totalRecords records)");
     
@@ -416,6 +419,15 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
     // Categorize records (store only keys, not row objects since they can't be reused)
     foreach ($records as $record) {
         $key = getRecordKey($record, $keyField);
+        
+        // Track REFNO for artran recalculation (only for ictran table)
+        if ($table === 'ubs_ubsstk2015_ictran' && isset($record['REFNO'])) {
+            $refNo = trim($record['REFNO']);
+            if ($refNo && !in_array($refNo, $refNosToRecalculate)) {
+                $refNosToRecalculate[] = $refNo;
+            }
+        }
+        
         if (isset($existingRecords[$key])) {
             $updateRecords[] = ['key' => $key, 'record' => $record];
         } else {
@@ -831,6 +843,205 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
     }
 
     ProgressDisplay::info("Completed batch upsert for UBS $table_name");
+    
+    // ✅ Recalculate artran totals when ictran records are inserted/updated
+    if ($table === 'ubs_ubsstk2015_ictran' && !empty($refNosToRecalculate)) {
+        recalculateArtranTotals($refNosToRecalculate);
+    }
+}
+
+/**
+ * Recalculate artran totals based on ictran records
+ * Updates GROSS_BIL, NET_BIL, GRAND_BIL, DEBIT_BIL, INVGROSS, NET, GRAND, DEBITAMT
+ * 
+ * @param array $refNos Array of REFNOs (reference numbers) to recalculate
+ */
+function recalculateArtranTotals($refNos)
+{
+    if (empty($refNos)) {
+        return;
+    }
+    
+    try {
+        ProgressDisplay::info("🔄 Recalculating artran totals for " . count($refNos) . " reference(s)");
+        
+        // Parse artran table path
+        $artranTable = 'ubs_ubsstk2015_artran';
+        $arr = parseUbsTable($artranTable);
+        $artranTableName = $arr['table'];
+        $directory = strtoupper($arr['database']);
+        $artranPath = "C:/$directory/" . ENV::DBF_SUBPATH . "/{$artranTableName}.dbf";
+        
+        // Parse ictran table path
+        $ictranTable = 'ubs_ubsstk2015_ictran';
+        $arr = parseUbsTable($ictranTable);
+        $ictranTableName = $arr['table'];
+        $ictranPath = "C:/$directory/" . ENV::DBF_SUBPATH . "/{$ictranTableName}.dbf";
+        
+        // Process each REFNO
+        foreach ($refNos as $refNo) {
+            try {
+                $refNoTrimmed = trim($refNo);
+                ProgressDisplay::info("🔄 Processing REFNO: $refNoTrimmed");
+                
+                // Read all ictran records for this REFNO
+                $ictranReader = new \XBase\TableReader($ictranPath);
+                
+                $grossBil = 0;
+                $netBil = 0;
+                $grandBil = 0;
+                $debitBil = 0;
+                $invgross = 0;
+                $net = 0;
+                $grand = 0;
+                $debitamt = 0;
+                $totalDiscount = 0;
+                $totalTax = 0;
+                $itemCount = 0;
+                
+                while ($row = $ictranReader->nextRecord()) {
+                    if ($row->isDeleted()) continue;
+                    
+                    $rowRefNo = trim($row->get('REFNO') ?? '');
+                    // Case-insensitive comparison
+                    if (strtoupper($rowRefNo) !== strtoupper($refNoTrimmed)) {
+                        continue;
+                    }
+                    
+                    $itemCount++;
+                    
+                    // Sum up amounts from ictran
+                    $amtBil = (float)($row->get('AMT_BIL') ?? 0);
+                    $amt1Bil = (float)($row->get('AMT1_BIL') ?? 0);
+                    $amt = (float)($row->get('AMT') ?? 0);
+                    $amt1 = (float)($row->get('AMT1') ?? 0);
+                    $disamtBil = (float)($row->get('DISAMT_BIL') ?? 0);
+                    $taxamt = (float)($row->get('TAXAMT') ?? 0);
+                    
+                    $grossBil += $amtBil;
+                    $netBil += ($amtBil - $disamtBil);
+                    $invgross += $amt;
+                    $net += ($amt - $disamtBil);
+                    $totalDiscount += $disamtBil;
+                    $totalTax += $taxamt;
+                }
+                
+                $ictranReader->close();
+                
+                ProgressDisplay::info("📊 Found $itemCount ictran items for REFNO: $refNoTrimmed");
+                ProgressDisplay::info("📊 Totals - GROSS_BIL: $grossBil, NET_BIL: $netBil, Tax: $totalTax");
+                
+                // Calculate grand totals (net + tax)
+                $grandBil = $netBil + $totalTax;
+                $debitBil = $grandBil;
+                $grand = $net + $totalTax;
+                $debitamt = $grand;
+                
+                // Update artran record
+                $artranEditor = new \XBase\TableEditor($artranPath, [
+                    'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
+                ]);
+                
+                $found = false;
+                $artranEditor->moveTo(0); // Reset to beginning
+                
+                while ($row = $artranEditor->nextRecord()) {
+                    if ($row->isDeleted()) continue;
+                    
+                    $rowRefNo = trim($row->get('REFNO') ?? '');
+                    
+                    // Case-insensitive comparison and handle whitespace
+                    if (strtoupper($rowRefNo) === strtoupper($refNoTrimmed)) {
+                        // Update totals
+                        try {
+                            $row->set('GROSS_BIL', $grossBil);
+                            $row->set('NET_BIL', $netBil);
+                            $row->set('GRAND_BIL', $grandBil);
+                            $row->set('DEBIT_BIL', $debitBil);
+                            $row->set('INVGROSS', $invgross);
+                            $row->set('NET', $net);
+                            $row->set('GRAND', $grand);
+                            $row->set('DEBITAMT', $debitamt);
+                            
+                            $artranEditor->writeRecord();
+                            
+                            // Always save since we're using CLONE mode
+                            $artranEditor->save();
+                            
+                            $found = true;
+                            ProgressDisplay::info("📝 Updated artran DBF record for REFNO: $refNoTrimmed");
+                            break;
+                        } catch (\Throwable $e) {
+                            ProgressDisplay::error("❌ Error setting artran fields for REFNO $refNoTrimmed: " . $e->getMessage());
+                            throw $e;
+                        }
+                    }
+                }
+                
+                $artranEditor->close();
+                
+                if ($found) {
+                    ProgressDisplay::info("✅ Updated artran DBF for REFNO: $refNo (GROSS_BIL: $grossBil, GRAND_BIL: $grandBil)");
+                    
+                    // Also update local MySQL table
+                    try {
+                        $db_local = new mysql();
+                        $db_local->connect();
+                        
+                        $updateData = [
+                            'GROSS_BIL' => $grossBil,
+                            'NET_BIL' => $netBil,
+                            'GRAND_BIL' => $grandBil,
+                            'DEBIT_BIL' => $debitBil,
+                            'INVGROSS' => $invgross,
+                            'NET' => $net,
+                            'GRAND' => $grand,
+                            'DEBITAMT' => $debitamt,
+                            'UPDATED_ON' => date('Y-m-d H:i:s')
+                        ];
+                        
+                        // Update using REFNO as the key
+                        $refNoEscaped = $db_local->escape($refNo);
+                        $updateSql = "UPDATE `ubs_ubsstk2015_artran` SET ";
+                        $updateFields = [];
+                        foreach ($updateData as $field => $value) {
+                            $fieldEscaped = $db_local->escape($field);
+                            $valueEscaped = $db_local->escape($value);
+                            $updateFields[] = "`$fieldEscaped` = '$valueEscaped'";
+                        }
+                        $updateSql .= implode(', ', $updateFields) . " WHERE `REFNO` = '$refNoEscaped'";
+                        
+                        $db_local->query($updateSql);
+                        
+                        // Verify update
+                        $verifySql = "SELECT COUNT(*) as count FROM `ubs_ubsstk2015_artran` WHERE `REFNO` = '$refNoEscaped'";
+                        $verifyResult = $db_local->first($verifySql);
+                        $verifyCount = $verifyResult['count'] ?? 0;
+                        
+                        if ($verifyCount > 0) {
+                            ProgressDisplay::info("✅ Updated local MySQL artran for REFNO: $refNo");
+                        } else {
+                            ProgressDisplay::warning("⚠️  Local MySQL update completed but REFNO not found: $refNo");
+                        }
+                        
+                        $db_local->close();
+                    } catch (\Throwable $e) {
+                        ProgressDisplay::error("❌ Error updating local MySQL artran for REFNO $refNo: " . $e->getMessage());
+                        // Continue - DBF update succeeded
+                    }
+                } else {
+                    ProgressDisplay::warning("⚠️  Artran record not found for REFNO: $refNo");
+                }
+                
+            } catch (\Throwable $e) {
+                ProgressDisplay::error("❌ Error recalculating artran totals for REFNO $refNo: " . $e->getMessage());
+                // Continue with next REFNO
+            }
+        }
+        
+    } catch (\Throwable $e) {
+        ProgressDisplay::error("❌ Error in recalculateArtranTotals: " . $e->getMessage());
+    }
 }
 
 function getRecordKey($record, $keyField)
@@ -1199,13 +1410,288 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $field = $explode[1];
 
                 if ($remote_table_name == 'order_items') {
-                    $id = $dataRow['order_id'];
+                    // Try to use order_id first, fallback to reference_no
+                    if (isset($dataRow['order_id']) && !empty($dataRow['order_id'])) {
+                        $id = $dataRow['order_id'];
+                        $sql = "SELECT $field FROM $table WHERE id='$id'";
+                    } elseif (isset($dataRow['reference_no']) && !empty($dataRow['reference_no'])) {
+                        // Use reference_no as fallback
+                        $referenceNo = $db->escape($dataRow['reference_no']);
+                        $sql = "SELECT $field FROM $table WHERE reference_no='$referenceNo'";
+                    } else {
+                        // Skip if neither order_id nor reference_no is available
+                        continue;
+                    }
+                    
+                    $col = $db->first($sql);
+                    if ($col && isset($col[$field])) {
+                        $converted[$key] = $col[$field];
+                    }
+                } else {
+                    // For other tables, use the original logic if needed
+                    if (isset($dataRow['id'])) {
+                        $id = $dataRow['id'];
+                        $sql = "SELECT $field FROM $table WHERE id='$id'";
+                        $col = $db->first($sql);
+                        if ($col && isset($col[$field])) {
+                            $converted[$key] = $col[$field];
+                        }
+                    }
                 }
-
-                $sql = "SELECT $field FROM $table WHERE id='$id'";
-                $col = $db->first($sql);
-
-                $converted[$key] = $col[$field];
+            }
+        }
+        
+        // Special handling for order_items syncing to ictran
+        if ($remote_table_name == 'order_items') {
+            // Format TRANCODE as strpad 4 based on item_count (e.g., 1 => 0001)
+            if (isset($converted['TRANCODE']) && isset($dataRow['item_count'])) {
+                $itemCount = (int)$dataRow['item_count'];
+                $converted['TRANCODE'] = str_pad($itemCount, 4, '0', STR_PAD_LEFT);
+            }
+            
+            // Set FPERIOD to 8
+            $converted['FPERIOD'] = '8';
+            
+            // Set JOB_VALUE and JOB2_VALUE to 0
+            $converted['JOB_VALUE'] = '0';
+            $converted['JOB2_VALUE'] = '0';
+            
+            // Set DISPC1, DISPC2, DISPC3 to 0
+            $converted['DISPC1'] = '0';
+            $converted['DISPC2'] = '0';
+            $converted['DISPC3'] = '0';
+            
+            // Set TAXPEC1, TAXPEC2, TAXPEC3 to 0
+            $converted['TAXPEC1'] = '0';
+            $converted['TAXPEC2'] = '0';
+            $converted['TAXPEC3'] = '0';
+            
+            // Set DISAMT to 0 (or null if not present)
+            $converted['DISAMT'] = '0';
+            
+            // Set TAXAMT to 0
+            $converted['TAXAMT'] = '0';
+            
+            // Set FACTOR1 and FACTOR2 to 1
+            $converted['FACTOR1'] = '1';
+            $converted['FACTOR2'] = '1';
+            
+            // Set GST_ITEM and TOTALUP to 'N'
+            $converted['GST_ITEM'] = 'N';
+            $converted['TOTALUP'] = 'N';
+            
+            // Set PUR_PRICE to 0
+            $converted['PUR_PRICE'] = '0';
+            
+            // Set QTY2 - QTY6 to 0
+            $converted['QTY2'] = '0';
+            $converted['QTY3'] = '0';
+            $converted['QTY4'] = '0';
+            $converted['QTY5'] = '0';
+            $converted['QTY6'] = '0';
+            
+            // Set QTY7 = QTY1 (if QTY1 exists)
+            if (isset($converted['QTY1'])) {
+                $converted['QTY7'] = $converted['QTY1'];
+            } elseif (isset($dataRow['quantity'])) {
+                $converted['QTY7'] = $dataRow['quantity'];
+            } else {
+                $converted['QTY7'] = '0';
+            }
+            
+            // Set TEMPFIG1, SERCOST to 0
+            $converted['TEMPFIG1'] = '0';
+            $converted['SERCOST'] = '0';
+            
+            // Set M_CHARGE1 - M_CHARGE5 to 0
+            $converted['M_CHARGE1'] = '0';
+            $converted['M_CHARGE2'] = '0';
+            $converted['M_CHARGE3'] = '0';
+            $converted['M_CHARGE4'] = '0';
+            $converted['M_CHARGE5'] = '0';
+            
+            // Set ADTCOST1 - ADTCOST5 to 0
+            $converted['ADTCOST1'] = '0';
+            $converted['ADTCOST2'] = '0';
+            $converted['ADTCOST3'] = '0';
+            $converted['ADTCOST4'] = '0';
+            $converted['ADTCOST5'] = '0';
+            
+            // Set IT_COST, AV_COST, POINT, INV_DISC, INV_TAX, EDI_COU1, WRITEOFF, TOSHIP, SHIPPED to 0
+            $converted['IT_COST'] = '0';
+            $converted['AV_COST'] = '0';
+            $converted['POINT'] = '0';
+            $converted['INV_DISC'] = '0';
+            $converted['INV_TAX'] = '0';
+            $converted['EDI_COU1'] = '0';
+            $converted['WRITEOFF'] = '0';
+            $converted['TOSHIP'] = '0';
+            $converted['SHIPPED'] = '0';
+            
+            // Set MC1_BIL - MC5_BIL to 0
+            $converted['MC1_BIL'] = '0';
+            $converted['MC2_BIL'] = '0';
+            $converted['MC3_BIL'] = '0';
+            $converted['MC4_BIL'] = '0';
+            $converted['MC5_BIL'] = '0';
+            
+            // Set DAMT, TEMP1, TEMP2 to 0
+            $converted['DAMT'] = '0';
+            $converted['TEMP1'] = '0';
+            $converted['TEMP2'] = '0';
+            
+            // Set TOTAL_GROUP, MARK, TYPE_SEQ, TOURGROUP to 0
+            $converted['TOTAL_GROUP'] = '0';
+            $converted['MARK'] = '0';
+            $converted['TYPE_SEQ'] = '0';
+            $converted['TOURGROUP'] = '0';
+            
+            // Set FTP, DISPATCHED, APPLYSC to 0
+            $converted['FTP'] = '0';
+            $converted['DISPATCHED'] = '0';
+            $converted['APPLYSC'] = '0';
+            
+            // Set SVCCHGAMT, SVCTAXAMT, WGST, SVCTAXPER, GRNLINK, PRICEGRN, TAXTRANS, IMPSVCT, PRGOODS, PRGDSAMT, AUTOMOBI to 0
+            $converted['SVCCHGAMT'] = '0';
+            $converted['SVCTAXAMT'] = '0';
+            $converted['WGST'] = '0';
+            $converted['SVCTAXPER'] = '0';
+            $converted['GRNLINK'] = '0';
+            $converted['PRICEGRN'] = '0';
+            $converted['TAXTRANS'] = '0';
+            $converted['IMPSVCT'] = '0';
+            $converted['PRGOODS'] = '0';
+            $converted['PRGDSAMT'] = '0';
+            $converted['AUTOMOBI'] = '0';
+            
+            // Convert TRADATETIME to format "08/01/25 11:48 PM"
+            $tradatetime = null;
+            // Check for TRDATETIME (from mapping) or TRADATETIME (UBS field name) or created_at
+            if (isset($converted['TRDATETIME'])) {
+                $tradatetime = $converted['TRDATETIME'];
+            } elseif (isset($converted['TRADATETIME'])) {
+                $tradatetime = $converted['TRADATETIME'];
+            } elseif (isset($dataRow['created_at'])) {
+                $tradatetime = $dataRow['created_at'];
+            } elseif (isset($dataRow['TRDATETIME'])) {
+                $tradatetime = $dataRow['TRDATETIME'];
+            } elseif (isset($dataRow['TRADATETIME'])) {
+                $tradatetime = $dataRow['TRADATETIME'];
+            }
+            
+            if ($tradatetime) {
+                // Try to parse the datetime and convert to "MM/DD/YY HH:MM AM/PM" format
+                $timestamp = strtotime($tradatetime);
+                if ($timestamp !== false) {
+                    // Format: MM/DD/YY HH:MM AM/PM (e.g., "08/01/25 11:48 PM")
+                    $converted['TRADATETIME'] = date('m/d/y h:i A', $timestamp);
+                } else {
+                    // If parsing fails, use current time
+                    $converted['TRADATETIME'] = date('m/d/y h:i A');
+                }
+            } else {
+                // If no datetime found, use current time
+                $converted['TRADATETIME'] = date('m/d/y h:i A');
+            }
+            
+            // Set CURRATE to 1
+            $converted['CURRRATE'] = '1';
+            
+            // Get LOCATION from customer's territory, ensure TYPE is set, set NAME = customer_name, CUSTNO, and DATE
+            // Use reference_no to get order, then get customer territory and name
+            $referenceNo = $dataRow['reference_no'] ?? null;
+            if ($referenceNo) {
+                // Get order data (customer_id, type, customer_name, customer_code, order_date, and discount)
+                $orderSql = "SELECT customer_id, type, customer_name, customer_code, order_date, discount FROM orders WHERE reference_no='" . $db->escape($referenceNo) . "'";
+                $orderData = $db->first($orderSql);
+                
+                if ($orderData) {
+                    // Ensure TYPE is set
+                    if (!isset($converted['TYPE']) && isset($orderData['type'])) {
+                        $converted['TYPE'] = $orderData['type'];
+                    }
+                    
+                    // Set NAME = customer_name
+                    if (isset($orderData['customer_name'])) {
+                        $converted['NAME'] = $orderData['customer_name'];
+                    }
+                    
+                    // Set CUSTNO = customer_code from orders
+                    if (isset($orderData['customer_code'])) {
+                        $converted['CUSTNO'] = $orderData['customer_code'];
+                    }
+                    
+                    // Set DATE = order_date from orders (format: YYYY-MM-DD)
+                    if (isset($orderData['order_date'])) {
+                        $orderDate = $orderData['order_date'];
+                        $timestamp = strtotime($orderDate);
+                        if ($timestamp !== false) {
+                            // Format as YYYY-MM-DD (e.g., "2025-08-01")
+                            $converted['DATE'] = date('Y-m-d', $timestamp);
+                        } else {
+                            $converted['DATE'] = $orderDate;
+                        }
+                    }
+                    
+                    // Set DISAMT_BIL = order's discount
+                    if (isset($orderData['discount'])) {
+                        $converted['DISAMT_BIL'] = $orderData['discount'];
+                    }
+                    
+                    // Get LOCATION from customer's territory
+                    if (isset($orderData['customer_id'])) {
+                        $customerId = (int)$orderData['customer_id']; // Cast to int for safety
+                        $customerSql = "SELECT territory FROM customers WHERE id=$customerId";
+                        $customerData = $db->first($customerSql);
+                        
+                        if ($customerData && isset($customerData['territory'])) {
+                            $converted['LOCATION'] = $customerData['territory'];
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: If CUSTNO or DATE are still not set, try to get them from the table link resolution
+            // This handles cases where the mapping 'orders|customer_code' and 'orders|order_date' should have worked
+            if (!isset($converted['CUSTNO']) && isset($dataRow['order_id'])) {
+                $orderId = $dataRow['order_id'];
+                $orderSql = "SELECT customer_code FROM orders WHERE id=$orderId";
+                $orderData = $db->first($orderSql);
+                if ($orderData && isset($orderData['customer_code'])) {
+                    $converted['CUSTNO'] = $orderData['customer_code'];
+                }
+            }
+            
+            if (!isset($converted['DATE']) && isset($dataRow['order_id'])) {
+                $orderId = $dataRow['order_id'];
+                $orderSql = "SELECT order_date FROM orders WHERE id=$orderId";
+                $orderData = $db->first($orderSql);
+                if ($orderData && isset($orderData['order_date'])) {
+                    $orderDate = $orderData['order_date'];
+                    $timestamp = strtotime($orderDate);
+                    if ($timestamp !== false) {
+                        // Format as YYYY-MM-DD (e.g., "2025-08-01")
+                        $converted['DATE'] = date('Y-m-d', $timestamp);
+                    } else {
+                        $converted['DATE'] = $orderDate;
+                    }
+                }
+            }
+            
+            // Set SIGN to -1
+            $converted['SIGN'] = '-1';
+            
+            // Set DISPEC1, DISPEC2, DISPEC3 to 0
+            $converted['DISPEC1'] = '0';
+            $converted['DISPEC2'] = '0';
+            $converted['DISPEC3'] = '0';
+            
+            // Set QTY_RET to 0
+            $converted['QTY_RET'] = '0';
+            
+            // DISAMT_BIL is set from order's discount above (if available), otherwise default to 0
+            if (!isset($converted['DISAMT_BIL'])) {
+                $converted['DISAMT_BIL'] = '0';
             }
         }
     }
