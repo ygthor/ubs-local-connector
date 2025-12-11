@@ -130,6 +130,7 @@ class Converter
                 'NAME' => 'customer_name',
                 'DATE'        => 'order_date',
                 'DESP'        => 'description',
+                'AGENNO'      => 'agent_no', // Agent number (user's name)
                 'GROSS_BIL'   => 'gross_amount',
                 'TAX1_BIL'    => 'tax1',
                 // 'TAX2_BIL'    => 'tax2',
@@ -157,6 +158,7 @@ class Converter
                 'TRANCODE' => 'item_count',
                 'CUSTNO' => 'orders|customer_code',
                 'DATE' => 'orders|order_date',
+                'AGENNO' => 'orders|agent_no',
                 // 'NAME ' => 'orders|customer_name',   
 
                 'REFNO'       => 'reference_no', 
