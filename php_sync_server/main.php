@@ -329,7 +329,8 @@ try {
                 if (empty($ubs_data)) break;
                 
                 // Validate and fix UPDATED_ON fields in UBS data
-                $ubs_data = validateAndFixUpdatedOn($ubs_data);
+                // For icgroup, preserve NULL values
+                $ubs_data = validateAndFixUpdatedOn($ubs_data, $ubs_table);
                 
                 ProgressDisplay::info("Syncing " . count($ubs_data) . " UBS records with " . count($remote_data) . " remote records");
                 
@@ -411,6 +412,18 @@ try {
                 ProgressDisplay::info("Resetting triggers for $remote_table_name");
                 $Core = Core::getInstance();
                 $Core->initRemoteData();
+            }
+            
+            // Link customers to users after customers sync
+            if ($remote_table_name === 'customers') {
+                try {
+                    $db_remote = new mysql();
+                    $db_remote->connect_remote();
+                    linkCustomersToUsers($db_remote);
+                    $db_remote->close();
+                } catch (Exception $e) {
+                    ProgressDisplay::warning("⚠️  Could not link customers to users: " . $e->getMessage());
+                }
             }
             
             // Track sync results for this table

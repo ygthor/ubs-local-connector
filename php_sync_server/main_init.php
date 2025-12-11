@@ -61,8 +61,16 @@ try {
         $processedTables++;
         ProgressDisplay::info("📁 Processing table $processedTables/$totalTables: $ubs_table");
 
+        // For icgroup, sync ALL records including NULL CREATED_ON/UPDATED_ON
+        $isIcgroup = ($ubs_table === 'ubs_ubsstk2015_icgroup');
+        
         // Count total rows to process
-        $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON IS NOT NULL";
+        if ($isIcgroup) {
+            $countSql = "SELECT COUNT(*) as total FROM `$ubs_table`";
+            ProgressDisplay::info("🔄 FORCE SYNC: Syncing ALL icgroup records (including NULL CREATED_ON/UPDATED_ON)");
+        } else {
+            $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON IS NOT NULL";
+        }
         $totalRows = $db->first($countSql)['total'] ?? 0;
 
         ProgressDisplay::info("Total rows to process: $totalRows");
@@ -74,12 +82,21 @@ try {
             ProgressDisplay::info("📦 Fetching chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
 
             // Fetch a chunk of data
-            $sql = "
-                SELECT * FROM `$ubs_table`
-                WHERE UPDATED_ON IS NOT NULL
-                ORDER BY UPDATED_ON ASC
-                LIMIT $chunkSize OFFSET $offset
-            ";
+            if ($isIcgroup) {
+                // For icgroup, fetch ALL records including NULL values
+                $sql = "
+                    SELECT * FROM `$ubs_table`
+                    ORDER BY COALESCE(UPDATED_ON, '1970-01-01') ASC
+                    LIMIT $chunkSize OFFSET $offset
+                ";
+            } else {
+                $sql = "
+                    SELECT * FROM `$ubs_table`
+                    WHERE UPDATED_ON IS NOT NULL
+                    ORDER BY UPDATED_ON ASC
+                    LIMIT $chunkSize OFFSET $offset
+                ";
+            }
             $ubs_data = $db->get($sql);
 
             if (empty($ubs_data)) {
@@ -87,7 +104,8 @@ try {
             }
 
             // ✅ Validate timestamps
-            $ubs_data = validateAndFixUpdatedOn($ubs_data);
+            // For icgroup, preserve NULL values
+            $ubs_data = validateAndFixUpdatedOn($ubs_data, $ubs_table);
 
             // ✅ Compare and prepare for sync
             $comparedData = syncEntity($ubs_table, $ubs_data, []);
@@ -110,6 +128,15 @@ try {
         }
 
         echo "✅ Finished processing $ubs_table\n";
+        
+        // Link customers to users after customers sync
+        if ($remoteTable === 'customers') {
+            try {
+                linkCustomersToUsers($db_remote);
+            } catch (Exception $e) {
+                ProgressDisplay::warning("⚠️  Could not link customers to users: " . $e->getMessage());
+            }
+        }
         
         // ✅ NOTE: icgroup is now synced directly from icgroup.dbf (enabled in converter.class.php)
         // The following generation logic is kept as fallback but commented out to avoid conflicts

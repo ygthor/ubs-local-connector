@@ -1062,8 +1062,17 @@ function fetchServerData($table, $updatedAfter = null, $bearerToken = null)
     $column_updated_at = Converter::mapUpdatedAtField($alias_table);
 
     // ✅ FORCE SYNC: If $updatedAfter is null, fetch ALL records
+    // For icgroup, don't filter NULL values - sync all records including NULL CREATED_ON/UPDATED_ON
+    $forceSyncTables = ['ubs_ubsstk2015_icitem', 'ubs_ubsstk2015_icgroup'];
+    $isForceSyncTable = in_array($table, $forceSyncTables);
+    
     if ($updatedAfter === null) {
-        $sql = "SELECT * FROM $alias_table WHERE $column_updated_at IS NOT NULL";
+        if ($isForceSyncTable && $alias_table === 'icgroup') {
+            // For icgroup, fetch ALL records including NULL values
+            $sql = "SELECT * FROM $alias_table";
+        } else {
+            $sql = "SELECT * FROM $alias_table WHERE $column_updated_at IS NOT NULL";
+        }
     } else {
         $sql = "SELECT * FROM $alias_table WHERE $column_updated_at > '$updatedAfter'";
     }
@@ -1948,7 +1957,8 @@ function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
                 }
                 
                 // Validate timestamps
-                $ubs_data = validateAndFixUpdatedOn($ubs_data);
+                // For icgroup, preserve NULL values
+                $ubs_data = validateAndFixUpdatedOn($ubs_data, $ubs_table);
                 
                 // Compare and prepare for sync
                 $comparedData = syncEntity($ubs_table, $ubs_data, []);
@@ -2022,7 +2032,8 @@ function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
                 }
                 
                 // Validate timestamps
-                $icgroup_ubs_data = validateAndFixUpdatedOn($icgroup_ubs_data);
+                // For icgroup, preserve NULL values
+                $icgroup_ubs_data = validateAndFixUpdatedOn($icgroup_ubs_data, $ubs_icgroup_table);
                 
                 // Compare and prepare for sync
                 $icgroup_comparedData = syncEntity($ubs_icgroup_table, $icgroup_ubs_data, []);
@@ -2063,4 +2074,111 @@ function syncIcitemAndIcgroup($db_local = null, $db_remote = null)
     }
     
     return $result;
+}
+
+/**
+ * Link customers to users in user_customers table based on agent_no
+ * Matches customer.agent_no to user.name or user.username
+ * 
+ * @param mysql|null $db_remote Optional remote database connection (creates new if not provided)
+ */
+function linkCustomersToUsers($db_remote = null)
+{
+    try {
+        if ($db_remote === null) {
+            $db_remote = new mysql();
+            $db_remote->connect_remote();
+        }
+        
+        ProgressDisplay::info("🔗 Linking customers to users based on agent_no...");
+        
+        // Get all customers with agent_no
+        $customersSql = "SELECT id, customer_code, agent_no FROM customers WHERE agent_no IS NOT NULL AND agent_no != ''";
+        $customers = $db_remote->get($customersSql);
+        
+        if (empty($customers)) {
+            ProgressDisplay::info("⚠️  No customers with agent_no found");
+            return;
+        }
+        
+        ProgressDisplay::info("📊 Found " . count($customers) . " customers with agent_no");
+        
+        // Get all users with their name and username
+        $usersSql = "SELECT id, name, username FROM users";
+        $users = $db_remote->get($usersSql);
+        
+        if (empty($users)) {
+            ProgressDisplay::warning("⚠️  No users found in database");
+            return;
+        }
+        
+        // Create a map of agent identifiers to user IDs
+        // Match by name first, then username
+        $agentToUserId = [];
+        foreach ($users as $user) {
+            $name = trim($user['name'] ?? '');
+            $username = trim($user['username'] ?? '');
+            
+            if (!empty($name)) {
+                $agentToUserId[strtoupper($name)] = $user['id'];
+            }
+            if (!empty($username)) {
+                $agentToUserId[strtoupper($username)] = $user['id'];
+            }
+        }
+        
+        // Link customers to users
+        $linkedCount = 0;
+        $skippedCount = 0;
+        $existingCount = 0;
+        
+        foreach ($customers as $customer) {
+            $customerId = $customer['id'];
+            $agentNo = trim($customer['agent_no'] ?? '');
+            
+            if (empty($agentNo)) {
+                $skippedCount++;
+                continue;
+            }
+            
+            // Try to find matching user by agent_no (case-insensitive)
+            $agentNoUpper = strtoupper($agentNo);
+            $userId = $agentToUserId[$agentNoUpper] ?? null;
+            
+            if ($userId === null) {
+                $skippedCount++;
+                ProgressDisplay::warning("⚠️  No user found for agent_no: '$agentNo' (customer: {$customer['customer_code']})");
+                continue;
+            }
+            
+            // Check if link already exists (use escaped values for safety)
+            $userIdEscaped = (int)$userId; // Cast to int for safety
+            $customerIdEscaped = (int)$customerId; // Cast to int for safety
+            $existingLinkSql = "SELECT id FROM user_customers WHERE user_id = $userIdEscaped AND customer_id = $customerIdEscaped";
+            $existingLink = $db_remote->first($existingLinkSql);
+            
+            if ($existingLink) {
+                $existingCount++;
+                continue; // Link already exists
+            }
+            
+            // Create new link using insert method
+            $db_remote->insert('user_customers', [
+                'user_id' => $userIdEscaped,
+                'customer_id' => $customerIdEscaped,
+                'created_at' => date('Y-m-d H:i:s'),
+                'updated_at' => date('Y-m-d H:i:s')
+            ]);
+            $linkedCount++;
+        }
+        
+        ProgressDisplay::info("✅ Customer-User linking completed:");
+        ProgressDisplay::info("   - Linked: $linkedCount");
+        ProgressDisplay::info("   - Already linked: $existingCount");
+        ProgressDisplay::info("   - Skipped (no match): $skippedCount");
+        
+    } catch (Exception $e) {
+        ProgressDisplay::error("❌ Error linking customers to users: " . $e->getMessage());
+        // Don't throw - allow sync to continue even if linking fails
+    }
 }

@@ -119,6 +119,7 @@ class Converter
                 'TERM_IN_M'  => 'payment_term',
                 'PROV_DISC'  => 'max_discount',
                 'TEMP'       => 'lot_type',
+                'AGENT'      => 'agent_no',
                 'CREATED_ON' => 'created_at',
                 'UPDATED_ON' => 'updated_at',
             ],

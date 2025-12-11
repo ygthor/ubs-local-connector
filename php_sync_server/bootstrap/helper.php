@@ -483,12 +483,20 @@ function executeSyncWithTransaction($operation, $useTransactions = true) {
  * @param array $data Array of records to validate
  * @return array Array with validated UPDATED_ON fields
  */
-function validateAndFixUpdatedOn($data) {
+function validateAndFixUpdatedOn($data, $table = null) {
     $currentDate = date('Y-m-d H:i:s');
+    
+    // For icgroup, preserve NULL values - don't convert them
+    $preserveNull = ($table === 'ubs_ubsstk2015_icgroup' || $table === 'icgroup');
     
     foreach ($data as &$record) {
         if (isset($record['UPDATED_ON'])) {
             $updatedOn = $record['UPDATED_ON'];
+            
+            // For icgroup, preserve NULL values
+            if ($preserveNull && $updatedOn === null) {
+                continue; // Keep NULL as is
+            }
             
             // Check if UPDATED_ON is invalid
             if (empty($updatedOn) || 
