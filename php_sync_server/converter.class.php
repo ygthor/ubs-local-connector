@@ -203,16 +203,24 @@ class Converter
 
 
 
+    static function mapCreatedAtField($remote_table){
+        $maps = [
+            'orders' => 'created_at',
+            'order_items' => 'created_at',
+            'gldata' => 'CREATED_ON',
+            'icitem' => 'CREATED_ON',
+            'icgroup' => 'CREATED_ON',
+        ];
 
+        return $maps[$remote_table] ?? null; // default
+    }
     static function mapUpdatedAtField($remote_table){
         $maps = [
-            // 'artrans' => 'UPDATED_ON',
-            // 'artrans_items' => 'UPDATED_ON',
             'gldata' => 'UPDATED_ON',
             'icitem' => 'UPDATED_ON',
             'icgroup' => 'UPDATED_ON',
         ];
 
-        return $maps[$remote_table] ?? 'updated_at'; // default
+        return $maps[$remote_table] ?? 'updated_at'; // default to 'updated_at'
     }
 }

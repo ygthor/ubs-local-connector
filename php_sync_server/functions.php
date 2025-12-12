@@ -48,6 +48,24 @@ function getMemoryUsage()
     ];
 }
 
+/**
+ * Validates and sets timestamp field in record if missing or invalid
+ * Preserves existing valid timestamps, only sets current time as fallback
+ * 
+ * @param array &$record The record array to modify
+ * @param string $field_name The timestamp field name (e.g., 'updated_at', 'UPDATED_ON')
+ */
+function ensureValidTimestamp(&$record, $field_name)
+{
+    if (!isset($record[$field_name]) || 
+        empty($record[$field_name]) || 
+        $record[$field_name] === '0000-00-00' || 
+        $record[$field_name] === '0000-00-00 00:00:00' ||
+        strtotime($record[$field_name]) === false) {
+        $record[$field_name] = date('Y-m-d H:i:s');
+    }
+}
+
 // Enhanced progress display system
 class ProgressDisplay
 {
@@ -263,47 +281,15 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
 
             // ✅ FIX: Use Converter::mapUpdatedAtField() to get correct timestamp field name
             // Some tables use 'updated_at' (lowercase), others use 'UPDATED_ON' (uppercase)
-            $timestamp_field = Converter::mapUpdatedAtField($remote_table_name);
+            $updated_at_field = Converter::mapUpdatedAtField($remote_table_name);
+            ensureValidTimestamp($record, $updated_at_field);
             
-            // Ensure timestamp field is always set (required for remote tables like gldata)
-            // Check both the correct field name and the alternative
-            $timestamp_value = null;
-            if (isset($record[$timestamp_field])) {
-                $timestamp_value = $record[$timestamp_field];
-            } elseif ($timestamp_field === 'updated_at' && isset($record['UPDATED_ON'])) {
-                $timestamp_value = $record['UPDATED_ON'];
-            } elseif ($timestamp_field === 'UPDATED_ON' && isset($record['updated_at'])) {
-                $timestamp_value = $record['updated_at'];
+            // Handle created_at field (optional - only if mapping exists)
+            $created_at_field = Converter::mapCreatedAtField($remote_table_name);
+            if ($created_at_field !== null) {
+                ensureValidTimestamp($record, $created_at_field);
             }
             
-            // Validate and set timestamp
-            if (
-                $timestamp_value === null || empty($timestamp_value) ||
-                $timestamp_value === '0000-00-00' ||
-                $timestamp_value === '0000-00-00 00:00:00' ||
-                strtotime($timestamp_value) === false
-            ) {
-                $record[$timestamp_field] = date('Y-m-d H:i:s');
-            } else {
-                $record[$timestamp_field] = $timestamp_value;
-            }
-            
-            // Remove the alternative timestamp field if it exists
-            if ($timestamp_field === 'updated_at') {
-                unset($record['UPDATED_ON']);
-            } else {
-                unset($record['updated_at']);
-            }
-
-            // ✅ FIX: Ensure created_at/CREATED_ON is set if it exists in the record but is invalid
-            $created_field = ($timestamp_field === 'UPDATED_ON') ? 'CREATED_ON' : 'created_at';
-            if (isset($record[$created_field]) && (
-                empty($record[$created_field]) ||
-                $record[$created_field] === '0000-00-00' ||
-                $record[$created_field] === '0000-00-00 00:00:00' ||
-                strtotime($record[$created_field]) === false)) {
-                $record[$created_field] = date('Y-m-d H:i:s');
-            }
 
             if (count($record) > 0) {
                 $processedRecords[] = $record;
