@@ -1427,10 +1427,16 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
     // Set the appropriate field name based on direction
     if ($direction === 'to_remote') {
-        // Remote tables use lowercase 'updated_at'
-        $converted['updated_at'] = $updatedAtValue;
-        // Remove uppercase version if it exists
-        unset($converted['UPDATED_ON']);
+        // ✅ FIX: Use Converter::mapUpdatedAtField() to get correct field name
+        // Some remote tables use 'updated_at' (lowercase), others use 'UPDATED_ON' (uppercase)
+        $updated_at_field = Converter::mapUpdatedAtField($remote_table_name);
+        $converted[$updated_at_field] = $updatedAtValue;
+        // Remove the alternative field if it exists
+        if ($updated_at_field === 'updated_at') {
+            unset($converted['UPDATED_ON']);
+        } else {
+            unset($converted['updated_at']);
+        }
     } else {
         // UBS/local MySQL uses uppercase 'UPDATED_ON'
         $converted['UPDATED_ON'] = $updatedAtValue;
