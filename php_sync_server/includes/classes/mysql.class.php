@@ -446,7 +446,7 @@ class mysql
 						$check_sql = "SELECT " . implode(', ', $select_fields_simple) . " FROM $table_name WHERE `$primaryKey` IN (" . implode(',', $keys_escaped) . ")";
 						$query_result = $this->query($check_sql);
 						if ($query_result === false) {
-							throw new Exception("Failed to query existing records: " . mysqli_error($this->con));
+							throw new Exception("❌ Failed to query existing records for table '$table': " . mysqli_error($this->con));
 						}
 						// Set updated_at to null since we couldn't fetch it
 						$existing_records = $this->get($query_result);
@@ -454,7 +454,7 @@ class mysql
 							$record['updated_at'] = null;
 						}
 					} else {
-						throw new Exception("Failed to query existing records: " . $error);
+						throw new Exception("❌ Failed to query existing records for table '$table': " . $error);
 					}
 				} else {
 					$existing_records = $this->get($query_result);
@@ -558,10 +558,7 @@ class mysql
 			$records_to_insert[] = $record;
 			$record_values = [];
 			foreach ($columns as $column) {
-				// ✅ FIX: Skip 'id' column (auto-increment, shouldn't be inserted)
-				if (strtolower($column) === 'id') {
-					continue;
-				}
+				// Note: 'id' and remote timestamp fields are already filtered out in $columns above
 				$value = $record[$column] ?? null;
 				
 				if (is_numeric($value) && substr($value, 0, 1) != '0') {
@@ -656,12 +653,12 @@ class mysql
 			$error = mysqli_error($this->con);
 			dump("MYSQL ERROR BULK UPSERT: " . $error);
 			dump($sql);
-			throw new Exception("MySQL bulk upsert error: $error");
+			throw new Exception("❌ MySQL bulk upsert error for table '$table': $error");
 		}
 		
 		if (!$result) {
 			$error = mysqli_error($this->con) ?: "Unknown error";
-			throw new Exception("MySQL bulk upsert failed: $error");
+			throw new Exception("❌ MySQL bulk upsert failed for table '$table': $error");
 		}
 		
 		$affectedRows = mysqli_affected_rows($this->con);

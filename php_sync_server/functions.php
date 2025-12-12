@@ -677,34 +677,40 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         }
         $db_local_check->close();
         
+        // ✅ FIX: Use convert() function to properly convert records to UBS format
+        // This ensures updated_at → UPDATED_ON conversion and removes remote-only fields
+        $remote_table_name = Converter::table_convert_remote($table);
+        if (!$remote_table_name) {
+            // If no remote table mapping, assume it's already in UBS format
+            $remote_table_name = $table;
+        }
+        
         $localRecords = [];
         foreach ($records as $record) {
-            // Filter out remote-only columns and columns that don't exist in local table
+            // Use convert() to properly convert remote format to UBS format
+            // This handles updated_at → UPDATED_ON conversion automatically
+            $convertedRecord = convert($remote_table_name, $record, 'to_ubs');
+            
+            // Filter out columns that don't exist in local table (safety check)
             $filteredRecord = [];
-            foreach ($record as $key => $value) {
+            foreach ($convertedRecord as $key => $value) {
                 $keyLower = strtolower($key);
-                // Skip remote-only columns (case-sensitive match)
-                // Exclusion list uses lowercase, but UBS uses uppercase (ID)
-                // So we check lowercase version of key against lowercase exclusion list
+                // Skip remote-only columns (id, etc.)
                 if (in_array($keyLower, $remoteOnlyColumns)) {
-                    continue; // Explicitly excluded remote-only column
+                    continue;
                 }
-                // ✅ FIX: Explicitly remove remote timestamp fields (updated_at, created_at) 
-                // UBS/local MySQL uses UPDATED_ON/CREATED_ON (uppercase)
-                if (in_array($keyLower, ['updated_at', 'created_at'])) {
-                    continue; // Skip remote timestamp fields
-                }
-                // Skip columns that don't exist in local table (safety check)
+                // Skip columns that don't exist in local table
                 if (!empty($tableColumns) && !isset($tableColumns[$keyLower])) {
-                    continue; // Column doesn't exist in local table
+                    continue;
                 }
                 $filteredRecord[$key] = $value;
             }
             
-            // Ensure UPDATED_ON is set to current time if updating
+            // Ensure UPDATED_ON is set (convert() should handle this, but double-check)
             if (!isset($filteredRecord['UPDATED_ON']) || empty($filteredRecord['UPDATED_ON'])) {
                 $filteredRecord['UPDATED_ON'] = date('Y-m-d H:i:s');
             }
+            
             $localRecords[] = $filteredRecord;
         }
         
