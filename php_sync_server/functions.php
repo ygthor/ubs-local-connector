@@ -267,38 +267,14 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         }
     }
 
-    // ✅ FIX: Deduplicate records within the batch (keep most recent for orders)
-    if ($remote_table_name == 'orders' && !empty($processedRecords)) {
-        $deduplicated = [];
-        $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
-        
-        foreach ($processedRecords as $record) {
-            $key = $record[$primary_key] ?? '';
-            if (empty($key)) {
-                continue;
-            }
-            
-            if (!isset($deduplicated[$key])) {
-                $deduplicated[$key] = $record;
-            } else {
-                // Compare timestamps and keep the most recent
-                $existing_time = isset($deduplicated[$key][$column_updated_at]) ? strtotime($deduplicated[$key][$column_updated_at]) : 0;
-                $new_time = isset($record[$column_updated_at]) ? strtotime($record[$column_updated_at]) : 0;
-                
-                if ($new_time > $existing_time) {
-                    dump("⚠️  Duplicate reference_no '$key' in batch - keeping more recent record");
-                    $deduplicated[$key] = $record;
-                }
-            }
-        }
-        
-        $processedRecords = array_values($deduplicated);
-        if (count($processedRecords) < $totalRecords) {
-            dump("ℹ️  Deduplicated batch: " . count($processedRecords) . " unique records out of $totalRecords");
-        }
+    // Ensure primary key is correctly detected before proceeding
+    if (empty($primary_key)) {
+        ProgressDisplay::error("❌ No primary key defined for table: $remote_table_name");
+        return false;
     }
 
     // Use bulk upsert for better performance
+    // bulkUpsert() handles ALL deduplication safely - it deletes old duplicates and keeps newest
     for ($i = 0; $i < count($processedRecords); $i += $batchSize) {
         $batch = array_slice($processedRecords, $i, $batchSize);
 
@@ -2760,6 +2736,14 @@ function linkCustomersToUsers($db_remote = null)
         }
         
         ProgressDisplay::info("✅ Customer-User linking completed:");
+        ProgressDisplay::info("   - Linked: $linkedCount customers");
+        ProgressDisplay::info("   - Already linked: $existingCount customers");
+        ProgressDisplay::info("   - Skipped (no match): $skippedCount customers");
+        
+    } catch (Exception $e) {
+        ProgressDisplay::error("❌ Error linking customers to users: " . $e->getMessage());
+        throw $e;
+    }
 }
 
 /**
