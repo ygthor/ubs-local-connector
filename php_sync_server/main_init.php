@@ -165,6 +165,103 @@ try {
         // Don't fail the entire sync if duplicate cleanup fails
     }
 
+    // ============================
+    // Clean up old DO orders (keep only latest per agent)
+    // ============================
+    try {
+        ProgressDisplay::info("🧹 Cleaning up old DO orders (keeping latest per agent)...");
+        
+        $db_remote = new mysql();
+        $db_remote->connect_remote();
+        
+        // Use current date for cleanup (escape for SQL safety)
+        $cleanupDate = $db_remote->escape(date('Y-m-d'));
+        
+        // Start transaction
+        $db_remote->query("START TRANSACTION");
+        
+        // Create temporary table with latest DO order per agent
+        $createTempTableSql = "
+            CREATE TEMPORARY TABLE latest_do AS
+            SELECT 
+                agent_no,
+                reference_no
+            FROM (
+                SELECT 
+                    agent_no,
+                    reference_no,
+                    ROW_NUMBER() OVER (PARTITION BY agent_no ORDER BY order_date DESC, reference_no DESC) AS rn
+                FROM orders
+                WHERE type = 'DO'
+                  AND order_date <= '$cleanupDate'
+            ) x
+            WHERE rn = 1
+        ";
+        $db_remote->query($createTempTableSql);
+        
+        if (mysqli_error($db_remote->con)) {
+            throw new Exception("Failed to create temporary table: " . mysqli_error($db_remote->con));
+        }
+        
+        // Delete old DO orders (except latest per agent)
+        $deleteOrdersSql = "
+            DELETE o
+            FROM orders o
+            LEFT JOIN latest_do l 
+                   ON o.reference_no = l.reference_no
+                  AND o.agent_no = l.agent_no
+            WHERE o.type = 'DO'
+              AND o.order_date <= '$cleanupDate'
+              AND l.reference_no IS NULL
+        ";
+        $db_remote->query($deleteOrdersSql);
+        
+        if (mysqli_error($db_remote->con)) {
+            throw new Exception("Failed to delete old DO orders: " . mysqli_error($db_remote->con));
+        }
+        
+        $deletedOrders = mysqli_affected_rows($db_remote->con);
+        
+        // Delete orphan order_items
+        $deleteItemsSql = "
+            DELETE oi
+            FROM order_items oi
+            LEFT JOIN orders o
+                   ON oi.reference_no = o.reference_no
+            WHERE o.reference_no IS NULL
+              AND oi.created_at <= '$cleanupDate'
+        ";
+        $db_remote->query($deleteItemsSql);
+        
+        if (mysqli_error($db_remote->con)) {
+            throw new Exception("Failed to delete orphan order_items: " . mysqli_error($db_remote->con));
+        }
+        
+        $deletedItems = mysqli_affected_rows($db_remote->con);
+        
+        // Commit transaction
+        $db_remote->query("COMMIT");
+        $db_remote->close();
+        
+        if ($deletedOrders > 0 || $deletedItems > 0) {
+            ProgressDisplay::info("✅ Cleaned up old DO orders: Deleted $deletedOrders orders and $deletedItems orphan items");
+        } else {
+            ProgressDisplay::info("✅ No old DO orders to clean up");
+        }
+    } catch (Exception $e) {
+        // Rollback on error
+        if (isset($db_remote) && $db_remote) {
+            try {
+                $db_remote->query("ROLLBACK");
+                $db_remote->close();
+            } catch (Exception $rollbackError) {
+                // Ignore rollback errors
+            }
+        }
+        ProgressDisplay::warning("⚠️  Could not clean up old DO orders: " . $e->getMessage());
+        // Don't fail the entire sync if cleanup fails
+    }
+
     // Log successful sync
     $db->insert('sync_logs', [
         'synced_at' => date('Y-m-d H:i:s')
