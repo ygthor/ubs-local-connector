@@ -6,7 +6,7 @@ Add-Type -AssemblyName System.Windows.Forms
 $targetPrograms = @("cpl","vstk","daccount")
 
 # ============================
-# KBS tasks to run
+# KBS tasks to run in sequence
 # ============================
 $tasks = @(
     @{ 
@@ -41,29 +41,62 @@ if ($running) {
 }
 
 # ============================
-# Delete, recreate, and run tasks
+# Function: Delete & recreate task
 # ============================
-foreach ($task in $tasks) {
+function Recreate-Task {
+    param($task)
+
     $taskName = $task.Name
     $taskPath = $task.Path
     $script = $task.Script
     $arguments = $task.Arguments
 
-    # Full task name for schtasks.exe
     $fullTaskName = if ($taskPath -eq "\") { $taskName } else { "$taskPath$taskName" }
 
     try {
-        # Delete task if exists
+        # Delete old task
         schtasks.exe /Delete /TN "$fullTaskName" /F | Out-Null
 
-        # Recreate task: daily, repeat every 10 minutes for 24 hours, run as SYSTEM
+        # Create new task (Daily, repeat 10 min, SYSTEM)
         $taskAction = "`"$script`" `"$arguments`""
-        schtasks.exe /Create /TN "$fullTaskName" /TR "$taskAction" /SC DAILY /ST 00:00 /RI 10 /DU 24:00 /RL HIGHEST /RU SYSTEM /F | Out-Null
-
-        # Run task immediately
-        schtasks.exe /Run /TN "$fullTaskName" | Out-Null
+        schtasks.exe /Create /TN "$fullTaskName" `
+                      /TR "$taskAction" `
+                      /SC DAILY /ST 00:00 `
+                      /RI 10 /DU 24:00 `
+                      /RL HIGHEST /RU SYSTEM /F | Out-Null
     }
-    catch {
-        # Ignore errors silently
+    catch {}
+}
+
+# ============================
+# Function: Run task and wait
+# ============================
+function Run-And-Wait {
+    param($taskName)
+
+    # Start the task
+    schtasks.exe /Run /TN "$taskName" | Out-Null
+
+    # Wait until the task is no longer running
+    Write-Host "Waiting for $taskName to finish..."
+    while ($true) {
+        $state = (schtasks.exe /Query /TN "$taskName" /FO LIST /V |
+                  Select-String "Status").ToString()
+
+        if ($state -notmatch "Running") {
+            break
+        }
+        Start-Sleep -Seconds 2
     }
 }
+
+# ============================
+# Process tasks (SEQUENTIAL)
+# ============================
+foreach ($task in $tasks) {
+    Recreate-Task -task $task
+}
+
+# Run tasks **in order**
+Run-And-Wait "KBS SYNC Remote"
+Run-And-Wait "KBS SYNC UBS to Local MYSQL"
