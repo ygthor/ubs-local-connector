@@ -110,6 +110,11 @@ class mysql
 		$update_arr = [];
 
 		foreach ($arr as $k => $v) {
+			// ✅ FIX: Skip 'id' field - it's auto-increment and shouldn't be updated
+			if (strtolower($k) === 'id') {
+				continue;
+			}
+			
 			if (
 				is_numeric($v)
 				&& substr($v, 0, 1) != '0' // PREVENT Postcode & IC issue
@@ -427,8 +432,13 @@ class mysql
 			}
 		}
 		
-		// Get all columns from first record
+		// Get all columns from first record, but exclude 'id' (auto-increment)
+		// ✅ FIX: Remove 'id' field to prevent "Column 'id' cannot be null" errors
 		$columns = array_keys($records[0]);
+		$columns = array_filter($columns, function($col) {
+			return strtolower($col) !== 'id';
+		});
+		$columns = array_values($columns); // Re-index array
 		$columns_str = '`' . implode('`, `', $columns) . '`';
 		
 		// Build VALUES clause - filter out records that already exist
@@ -471,6 +481,10 @@ class mysql
 			$records_to_insert[] = $record;
 			$record_values = [];
 			foreach ($columns as $column) {
+				// ✅ FIX: Skip 'id' column (auto-increment, shouldn't be inserted)
+				if (strtolower($column) === 'id') {
+					continue;
+				}
 				$value = $record[$column] ?? null;
 				
 				if (is_numeric($value) && substr($value, 0, 1) != '0') {

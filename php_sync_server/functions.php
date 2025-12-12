@@ -255,6 +255,11 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         unset($record['UPDATED_BY']);
         unset($record['created_by']);
         unset($record['updated_by']);
+        
+        // ✅ FIX: Remove 'id' field - remote tables use auto-increment ID that shouldn't be set manually
+        // This prevents "Column 'id' cannot be null" errors
+        unset($record['id']);
+        unset($record['ID']);
 
         if (count($record) > 0) {
             $processedRecords[] = $record;
@@ -1346,7 +1351,8 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             if (!in_array($ubsField, $mappedUbsFields) && !isset($converted[$ubsField])) {
                 // Common fields that should auto-map (same name in both tables)
                 // Note: CREATED_BY and UPDATED_BY are excluded as they may not exist in all remote tables
-                $autoMapFields = ['CREATED_ON', 'UPDATED_ON', 'id'];
+                // Note: 'id' is excluded because remote tables use auto-increment ID that shouldn't be set manually
+                $autoMapFields = ['CREATED_ON', 'UPDATED_ON'];
                 if (in_array(strtoupper($ubsField), array_map('strtoupper', $autoMapFields))) {
                     $converted[$ubsField] = $value;
                 }
