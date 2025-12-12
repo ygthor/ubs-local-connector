@@ -55,8 +55,8 @@ class Converter
             'customers' => 'customer_code',
             'orders' => 'reference_no',
             'order_items' => 'unique_key',
-            'artrans' => 'REFNO',
-            'artrans_items' => 'unique_key',
+            // 'artrans' => 'REFNO',
+            // 'artrans_items' => 'unique_key',
             'gldata' => 'ACCNO',
             'icitem' => 'ITEMNO',
             'icgroup' => 'name',
@@ -205,8 +205,8 @@ class Converter
 
     static function mapUpdatedAtField($remote_table){
         $maps = [
-            'artrans' => 'UPDATED_ON',
-            'artrans_items' => 'UPDATED_ON',
+            // 'artrans' => 'UPDATED_ON',
+            // 'artrans_items' => 'UPDATED_ON',
             'gldata' => 'UPDATED_ON',
             'icitem' => 'UPDATED_ON',
             'icgroup' => 'UPDATED_ON',

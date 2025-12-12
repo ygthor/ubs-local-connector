@@ -6,7 +6,6 @@ class Core
 
     public $remote_customer_lists = [];
     public $remote_order_lists = [];
-    public $remote_artrans_lists = [];
 
     private function __construct()
     {

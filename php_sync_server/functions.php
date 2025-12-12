@@ -249,12 +249,6 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
             $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
         }
 
-        if ($remote_table_name == 'artrans_items') {
-            $remote_artrans_lists = $Core->remote_artrans_lists;
-            $record[$primary_key] = $record['REFNO'] . '|' . $record['ITEMCOUNT'];
-            $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
-        }
-
         // Remove CREATED_BY and UPDATED_BY fields that may not exist in remote tables
         // Check both uppercase and lowercase variations to be safe
         unset($record['CREATED_BY']);
@@ -661,8 +655,6 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         // Note: Case-sensitive matching - UBS uses uppercase, MySQL uses lowercase
         $remoteOnlyColumns = [
             'id',
-            'artrans_id',           // Remote primary key for artrans (local uses REFNO)
-            'artrans_items_id',     // Remote primary key for artrans_items (if exists)
             'order_items_id',       // Remote primary key for order_items (if exists)
         ];
         
@@ -689,7 +681,7 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
             foreach ($record as $key => $value) {
                 $keyLower = strtolower($key);
                 // Skip remote-only columns (case-sensitive match)
-                // Exclusion list uses lowercase, but UBS uses uppercase (ID, ARTRANS_ID)
+                // Exclusion list uses lowercase, but UBS uses uppercase (ID)
                 // So we check lowercase version of key against lowercase exclusion list
                 if (in_array($keyLower, $remoteOnlyColumns)) {
                     continue; // Explicitly excluded remote-only column
@@ -1086,10 +1078,6 @@ function updateUbsRecord($editor, $row, $record, $table_name)
     }
 
     foreach ($record as $field => $value) {
-        if (in_array($field, ['artrans_id'])) {
-            continue;
-        }
-
         $column = $columnMap[strtolower($field)] ?? null;
         if ($column == null) {
             continue;
@@ -1965,9 +1953,6 @@ function upsertUbs($table, $record)
             // dump("update: $keyValue");
             // dump("$keyValue === $recordKeyValue");
             foreach ($record as $field => $value) {
-                if (in_array($field, ['artrans_id'])) {
-                    continue;
-                }
                 // Use the column map to get the column object directly
                 // need lowerr case
                 $column = $columnMap[strtolower($field)] ?? null;
@@ -2124,22 +2109,7 @@ function upsertRemote($table, $record)
         $record['order_id'] = $order_lists[$record['reference_no']] ?? null;
     }
 
-    if ($remote_table_name == 'artrans_items') {
-        $remote_artrans_lists = $Core->remote_artrans_lists;
-        $record[$primary_key] = $record['REFNO'] . '|' . $record['ITEMCOUNT'];
-        $record['artrans_id'] = $remote_artrans_lists[$record['REFNO']] ?? null;
-    }
-
-    if ($remote_table_name == 'artrans') {
-        // dd($record);
-        // dd($primary_key);
-    }
-
-    if (count($record) > 0) {
-        if ($remote_table_name == 'artrans_items') {
-            // dd($primary_key);
-            // dd($record);
-        }
+    if (count($record) > 0) {  
 
         // ✅ FIX: update_or_insert now handles duplicates automatically
         // No need for extra validation here - update_or_insert will check and clean duplicates

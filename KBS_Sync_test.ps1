@@ -1,4 +1,36 @@
 # ============================
+# Check for Administrator privileges
+# ============================
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $isAdmin) {
+    Write-Host "`n╔════════════════════════════════════════╗" -ForegroundColor Yellow
+    Write-Host "║   ELEVATING TO ADMINISTRATOR MODE    ║" -ForegroundColor Yellow
+    Write-Host "╚════════════════════════════════════════╝`n" -ForegroundColor Yellow
+    Write-Host "This script requires administrator privileges." -ForegroundColor Gray
+    Write-Host "Restarting with elevated permissions...`n" -ForegroundColor Gray
+    Start-Sleep -Seconds 1
+    
+    # Relaunch script as administrator
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`""
+    Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -WindowStyle Hidden
+    exit
+}
+
+# ============================
+# Suppress all error dialogs and popups
+# ============================
+$ErrorActionPreference = "SilentlyContinue"
+$ProgressPreference = "SilentlyContinue"
+
+# Suppress Windows error dialogs and zone checks
+$env:SEE_MASK_NOZONECHECKS = 1
+try {
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::SilentMode) -ErrorAction SilentlyContinue
+} catch {}
+
+# ============================
 # Startup Banner
 # ============================
 Clear-Host
@@ -64,18 +96,35 @@ function Recreate-Task {
     $fullTaskName = if ($taskPath -eq "\") { $taskName } else { "$taskPath$taskName" }
 
     try {
-        # Delete old task
-        schtasks.exe /Delete /TN "$fullTaskName" /F | Out-Null
+        # Delete old task (suppress all output and errors, no popups)
+        $nullFile = "$env:TEMP\schtasks_delete_$([System.Guid]::NewGuid().ToString('N')).txt"
+        $null = Start-Process -FilePath "schtasks.exe" `
+            -ArgumentList "/Delete", "/TN", "`"$fullTaskName`"", "/F" `
+            -WindowStyle Hidden -NoNewWindow -Wait `
+            -ErrorAction SilentlyContinue `
+            -RedirectStandardOutput $nullFile `
+            -RedirectStandardError $nullFile
+        if (Test-Path $nullFile) { Remove-Item $nullFile -ErrorAction SilentlyContinue -Force }
 
         # Create new task (Daily, repeat 10 min, SYSTEM)
         $taskAction = "`"$script`" `"$arguments`""
-        schtasks.exe /Create /TN "$fullTaskName" `
-                      /TR "$taskAction" `
-                      /SC DAILY /ST 00:00 `
-                      /RI 10 /DU 24:00 `
-                      /RL HIGHEST /RU SYSTEM /F | Out-Null
+        $nullFile = "$env:TEMP\schtasks_create_$([System.Guid]::NewGuid().ToString('N')).txt"
+        $null = Start-Process -FilePath "schtasks.exe" `
+            -ArgumentList "/Create", "/TN", "`"$fullTaskName`"", `
+                          "/TR", "$taskAction", `
+                          "/SC", "DAILY", "/ST", "00:00", `
+                          "/RI", "10", "/DU", "24:00", `
+                          "/RL", "HIGHEST", "/RU", "SYSTEM", "/F" `
+            -WindowStyle Hidden -NoNewWindow -Wait `
+            -ErrorAction SilentlyContinue `
+            -RedirectStandardOutput $nullFile `
+            -RedirectStandardError $nullFile
+        if (Test-Path $nullFile) { Remove-Item $nullFile -ErrorAction SilentlyContinue -Force }
     }
-    catch {}
+    catch {
+        # Silently handle any errors
+        $null = $_
+    }
 }
 
 # ============================
@@ -86,8 +135,15 @@ function Run-And-Wait {
 
     Write-Host "  → Starting: $taskName" -ForegroundColor Cyan
     
-    # Start the task
-    schtasks.exe /Run /TN "$taskName" | Out-Null
+    # Start the task (suppress all output and errors, no popups)
+    $nullFile = "$env:TEMP\schtasks_run_$([System.Guid]::NewGuid().ToString('N')).txt"
+    $null = Start-Process -FilePath "schtasks.exe" `
+        -ArgumentList "/Run", "/TN", "`"$taskName`"" `
+        -WindowStyle Hidden -NoNewWindow -Wait `
+        -ErrorAction SilentlyContinue `
+        -RedirectStandardOutput $nullFile `
+        -RedirectStandardError $nullFile
+    if (Test-Path $nullFile) { Remove-Item $nullFile -ErrorAction SilentlyContinue -Force }
     
     Write-Host "  → Task started, monitoring status..." -ForegroundColor Gray
 
@@ -95,8 +151,34 @@ function Run-And-Wait {
     $dotCount = 0
     $elapsedSeconds = 0
     while ($true) {
-        $state = (schtasks.exe /Query /TN "$taskName" /FO LIST /V |
-                  Select-String "Status").ToString()
+        # Query task status (suppress all output and errors, no popups)
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        try {
+            $null = Start-Process -FilePath "schtasks.exe" `
+                -ArgumentList "/Query", "/TN", "`"$taskName`"", "/FO", "LIST", "/V" `
+                -WindowStyle Hidden -NoNewWindow -Wait `
+                -ErrorAction SilentlyContinue `
+                -RedirectStandardOutput $tempFile `
+                -RedirectStandardError $null
+            
+            if (Test-Path $tempFile) {
+                $state = (Get-Content $tempFile -ErrorAction SilentlyContinue | Select-String "Status" -ErrorAction SilentlyContinue)
+                if ($state) {
+                    $state = $state.ToString()
+                } else {
+                    $state = ""
+                }
+                Remove-Item $tempFile -ErrorAction SilentlyContinue -Force
+            } else {
+                $state = ""
+            }
+        }
+        catch {
+            $state = ""
+            if (Test-Path $tempFile) {
+                Remove-Item $tempFile -ErrorAction SilentlyContinue -Force
+            }
+        }
 
         if ($state -notmatch "Running") {
             Write-Progress -Activity "KBS Sync Test" -Status "$taskName - Completed!" -PercentComplete $overallPercent
