@@ -666,6 +666,11 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                 if (in_array($keyLower, $remoteOnlyColumns)) {
                     continue; // Explicitly excluded remote-only column
                 }
+                // ✅ FIX: Explicitly remove remote timestamp fields (updated_at, created_at) 
+                // UBS/local MySQL uses UPDATED_ON/CREATED_ON (uppercase)
+                if (in_array($keyLower, ['updated_at', 'created_at'])) {
+                    continue; // Skip remote timestamp fields
+                }
                 // Skip columns that don't exist in local table (safety check)
                 if (!empty($tableColumns) && !isset($tableColumns[$keyLower])) {
                     continue; // Column doesn't exist in local table
@@ -1361,6 +1366,20 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             $converted['UPDATED_ON'] = '1970-01-01 00:00:00';
             // dump("Warning: Invalid UPDATED_ON in converted data: '$updatedOn' - Using current date: {$converted['UPDATED_ON']}");
         }
+    }
+    
+    // ✅ FIX: Remove remote-specific fields that don't exist in UBS/local MySQL
+    // When converting to UBS, remove 'updated_at', 'created_at' if UPDATED_ON/CREATED_ON exist
+    if ($direction === 'to_ubs') {
+        // Remove lowercase versions if uppercase versions exist
+        if (isset($converted['UPDATED_ON'])) {
+            unset($converted['updated_at']);
+        }
+        if (isset($converted['CREATED_ON'])) {
+            unset($converted['created_at']);
+        }
+        // Also remove any other remote-only fields that might slip through
+        unset($converted['id']); // Remote auto-increment ID doesn't exist in UBS
     }
 
     if ($direction == 'to_remote') {
