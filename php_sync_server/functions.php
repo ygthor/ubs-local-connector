@@ -1345,7 +1345,12 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             }
         } else {
             if ($ubs && $remote) {
-                $converted[$ubs] = $dataRow[$remote] ?? null;
+                $value = $dataRow[$remote] ?? null;
+                // Ensure quantity-related fields are properly set (not null) for order_items
+                if ($remote_table_name == 'order_items' && $remote == 'quantity' && ($value === null || $value === '')) {
+                    $value = '0'; // Set to 0 instead of null to prevent BASE_RECORD default from being used
+                }
+                $converted[$ubs] = $value;
             }
         }
     }
@@ -1384,6 +1389,18 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
     }
 
     if ($direction == 'to_remote') {
+        // Special handling for order_items: Fix quantity sync issue
+        // Multiple UBS fields (QTY_BIL, QTY, QTY1) map to 'quantity'
+        // The mapping loop processes them in order, so QTY1 (last) overwrites previous values
+        // QTY1 might be 1 (default from BASE_RECORD), so we use QTY as the source for quantity
+        if ($remote_table_name == 'order_items') {
+            // Use QTY as the source for quantity (prioritize QTY over QTY_BIL and QTY1)
+            $qty = $dataRow['QTY'] ?? $dataRow['qty'] ?? null;
+            if ($qty !== null && $qty !== '') {
+                $converted['quantity'] = $qty;
+            }
+        }
+        
         // Remove fields that should not be in remote tables
         // These fields may exist in UBS but not in remote tables
         $fieldsToRemove = ['CREATED_BY', 'UPDATED_BY', 'created_by', 'updated_by'];
@@ -1483,6 +1500,32 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             // Set PUR_PRICE to 0
             $converted['PUR_PRICE'] = '0';
             
+            // Ensure QTY1 is set from quantity (fix for quantity sync issue)
+            // If QTY1 wasn't set in the mapping (e.g., quantity was null), set it explicitly
+            if (!isset($converted['QTY1']) || $converted['QTY1'] === null) {
+                if (isset($dataRow['quantity']) && $dataRow['quantity'] !== null) {
+                    $converted['QTY1'] = $dataRow['quantity'];
+                } else {
+                    $converted['QTY1'] = '0';
+                }
+            }
+            
+            // Also ensure QTY_BIL and QTY are set from quantity if they weren't set
+            if (!isset($converted['QTY_BIL']) || $converted['QTY_BIL'] === null) {
+                if (isset($dataRow['quantity']) && $dataRow['quantity'] !== null) {
+                    $converted['QTY_BIL'] = $dataRow['quantity'];
+                } else {
+                    $converted['QTY_BIL'] = '0';
+                }
+            }
+            if (!isset($converted['QTY']) || $converted['QTY'] === null) {
+                if (isset($dataRow['quantity']) && $dataRow['quantity'] !== null) {
+                    $converted['QTY'] = $dataRow['quantity'];
+                } else {
+                    $converted['QTY'] = '0';
+                }
+            }
+            
             // Set QTY2 - QTY6 to 0
             $converted['QTY2'] = '0';
             $converted['QTY3'] = '0';
@@ -1491,9 +1534,9 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             $converted['QTY6'] = '0';
             
             // Set QTY7 = QTY1 (if QTY1 exists)
-            if (isset($converted['QTY1'])) {
+            if (isset($converted['QTY1']) && $converted['QTY1'] !== null) {
                 $converted['QTY7'] = $converted['QTY1'];
-            } elseif (isset($dataRow['quantity'])) {
+            } elseif (isset($dataRow['quantity']) && $dataRow['quantity'] !== null) {
                 $converted['QTY7'] = $dataRow['quantity'];
             } else {
                 $converted['QTY7'] = '0';
