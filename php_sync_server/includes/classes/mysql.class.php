@@ -693,4 +693,22 @@ class mysql
 	{
 		return $this->in_transaction === true;
 	}
+	
+	/**
+	 * Get the last MySQL error message
+	 * @return string Error message or empty string if no error
+	 */
+	public function getError()
+	{
+		return mysqli_error($this->con) ?: '';
+	}
+	
+	/**
+	 * Get the number of affected rows from the last query
+	 * @return int Number of affected rows
+	 */
+	public function getAffectedRows()
+	{
+		return mysqli_affected_rows($this->con);
+	}
 }

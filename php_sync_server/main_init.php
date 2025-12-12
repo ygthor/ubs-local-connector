@@ -10,6 +10,25 @@ include(__DIR__ . '/bootstrap/cache.php');
 initializeSyncEnvironment();
 ProgressDisplay::start("🚀 Starting UBS Local Connector Initial Sync Process");
 
+// Remove any stale PHP locks before starting (from remove_lock.php functionality)
+$lockDir = __DIR__ . '/locks';
+if (is_dir($lockDir)) {
+    $lockFile = $lockDir . '/php_sync.lock';
+    $pidFile = $lockDir . '/php_sync.pid';
+    
+    // Check if lock exists and if process is still running
+    if (file_exists($lockFile)) {
+        $pid = file_exists($pidFile) ? file_get_contents($pidFile) : null;
+        
+        // If no PID or process is not running, remove stale lock
+        if (!$pid || !isProcessRunning($pid)) {
+            @unlink($lockFile);
+            @unlink($pidFile);
+            ProgressDisplay::info("🔓 Removed stale PHP sync lock");
+        }
+    }
+}
+
 // Check if Python sync is running
 if (isSyncRunning('python')) {
     ProgressDisplay::error("❌ Python sync is currently running. Please wait for it to complete.");
@@ -199,8 +218,8 @@ try {
         ";
         $db_remote->query($createTempTableSql);
         
-        if (mysqli_error($db_remote->con)) {
-            throw new Exception("Failed to create temporary table: " . mysqli_error($db_remote->con));
+        if ($db_remote->getError()) {
+            throw new Exception("Failed to create temporary table: " . $db_remote->getError());
         }
         
         // Delete old DO orders (except latest per agent)
@@ -216,11 +235,11 @@ try {
         ";
         $db_remote->query($deleteOrdersSql);
         
-        if (mysqli_error($db_remote->con)) {
-            throw new Exception("Failed to delete old DO orders: " . mysqli_error($db_remote->con));
+        if ($db_remote->getError()) {
+            throw new Exception("Failed to delete old DO orders: " . $db_remote->getError());
         }
         
-        $deletedOrders = mysqli_affected_rows($db_remote->con);
+        $deletedOrders = $db_remote->getAffectedRows();
         
         // Delete orphan order_items
         $deleteItemsSql = "
@@ -233,11 +252,11 @@ try {
         ";
         $db_remote->query($deleteItemsSql);
         
-        if (mysqli_error($db_remote->con)) {
-            throw new Exception("Failed to delete orphan order_items: " . mysqli_error($db_remote->con));
+        if ($db_remote->getError()) {
+            throw new Exception("Failed to delete orphan order_items: " . $db_remote->getError());
         }
         
-        $deletedItems = mysqli_affected_rows($db_remote->con);
+        $deletedItems = $db_remote->getAffectedRows();
         
         // Commit transaction
         $db_remote->query("COMMIT");
