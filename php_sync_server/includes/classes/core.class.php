@@ -35,7 +35,7 @@ class Core
         $this->remote_order_lists = $data;
 
         $sql = "SELECT id, receipt_no FROM receipts";
-        $data = $db->pluck($sql,'id','reference_no');
+        $data = $db->pluck($sql,'id','receipt_no');
         $this->remote_order_lists = $data;
     }
 }

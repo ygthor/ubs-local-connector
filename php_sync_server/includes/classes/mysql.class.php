@@ -268,16 +268,23 @@ class mysql
 			$rs = $this->query($rs);
 		}
 
-		$data = [];
-		while ($row = mysqli_fetch_assoc($rs)) {
-			$row_col_value = isset($row[$col_value]) ? $row[$col_value] : null;
-			if (!empty($col_key)) {
+	$data = [];
+	while ($row = mysqli_fetch_assoc($rs)) {
+		$row_col_value = isset($row[$col_value]) ? $row[$col_value] : null;
+		if (!empty($col_key)) {
+			// Check if the key column exists in the row
+			if (isset($row[$col_key])) {
 				$data[$row[$col_key]] = $row_col_value;
 			} else {
-				$data[] = $row_col_value;
+				// Key column doesn't exist, skip this row or use a fallback
+				// Log warning for debugging
+				dump("⚠️  Warning: Column '$col_key' not found in pluck result. Available columns: " . implode(', ', array_keys($row)));
 			}
+		} else {
+			$data[] = $row_col_value;
 		}
-		return $data;
+	}
+	return $data;
 	}
 
 	function update_or_insert($table, $condition, $arr)
