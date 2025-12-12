@@ -436,6 +436,12 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         }
     }
     
+    // ✅ Extract existing keys BEFORE clearing existingRecords to avoid re-scanning the table
+    $existingKeys = [];
+    foreach (array_keys($existingRecords) as $key) {
+        $existingKeys[$key] = true;
+    }
+    
     // Clear existingRecords to free memory (we only need the keys now)
     unset($existingRecords);
 
@@ -517,28 +523,9 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         $keyFieldNames = implode('+', $primaryKeyFields);
         
         ProgressDisplay::info("🔍 Validating $keyFieldNames for $table_name inserts to prevent duplicates...");
-        $existingKeys = [];
         
-        try {
-            $checkEditor = new \XBase\TableReader($path);
-            while ($row = $checkEditor->nextRecord()) {
-                // Build composite key or single key
-                $keyParts = [];
-                foreach ($primaryKeyFields as $pkField) {
-                    $value = trim($row->get($pkField) ?? '');
-                    if (!empty($value)) {
-                        $keyParts[] = $value;
-                    }
-                }
-                if (!empty($keyParts)) {
-                    $key = implode('|', $keyParts);
-                    $existingKeys[$key] = true;
-                }
-            }
-            $checkEditor->close();
-        } catch (\Throwable $e) {
-            ProgressDisplay::warning("⚠️  Could not validate $keyFieldNames in UBS: " . $e->getMessage());
-        }
+        // ✅ Reuse existingKeys from first scan instead of re-reading the entire table
+        // $existingKeys already populated above from $existingRecords
         
         // Filter out records with duplicate primary keys
         $validInsertRecords = [];
@@ -546,25 +533,18 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         $emptyKeyCount = 0;
         
         foreach ($insertRecords as $record) {
-            // Build key from record
-            $keyParts = [];
-            foreach ($primaryKeyFields as $pkField) {
-                $value = trim($record[$pkField] ?? '');
-                if (empty($value)) {
-                    break; // Skip if any part of key is empty
-                }
-                $keyParts[] = $value;
-            }
+            // Build key from record using getRecordKey (same function used in first scan)
+            $key = getRecordKey($record, $keyField);
             
-            if (count($keyParts) !== count($primaryKeyFields)) {
+            // Check if key is empty (for composite keys, getRecordKey handles this)
+            if (empty($key) || (is_array($keyField) && strpos($key, '|') === false)) {
                 ProgressDisplay::warning("⚠️  Skipping record with empty/invalid $keyFieldNames");
                 $emptyKeyCount++;
                 continue;
             }
             
-            $key = implode('|', $keyParts);
             if (isset($existingKeys[$key])) {
-                $keyDisplay = is_array($keyField) ? $keyFieldNames . " = " . implode('+', $keyParts) : "$keyFieldNames = $key";
+                $keyDisplay = is_array($keyField) ? $keyFieldNames . " = " . str_replace('|', '+', $key) : "$keyFieldNames = $key";
                 ProgressDisplay::warning("⚠️  Skipping duplicate $keyFieldNames in UBS: $keyDisplay");
                 $duplicateCount++;
                 continue;
@@ -1765,6 +1745,12 @@ function syncEntity($entity, $ubs_data, $remote_data)
         'ubs_data' => [],
     ];
 
+    // ✅ OPTIMIZATION: Early exit if both are empty
+    if (empty($ubs_data) && empty($remote_data)) {
+        dump("✅ SyncEntity end - No data to process");
+        return $sync;
+    }
+
     // Create key-based arrays for faster lookup
     $ubs_keys = [];
     $remote_keys = [];
@@ -1792,6 +1778,23 @@ function syncEntity($entity, $ubs_data, $remote_data)
     // Debug: Log unique keys found
     if ($entity === 'ubs_ubsstk2015_icgroup') {
         dump("🔑 icgroup unique keys: " . count($ubs_keys) . " (keys: " . implode(', ', array_keys($ubs_keys)) . ")");
+    }
+
+    // ✅ OPTIMIZATION: If we have UBS data and large remote_data, filter remote_data to only matching keys
+    $shouldFilterRemote = !empty($ubs_keys) && count($remote_data) > 1000;
+    if ($shouldFilterRemote) {
+        dump("⚡ Optimizing: Filtering remote_data from " . count($remote_data) . " records to only matching keys...");
+        $ubs_key_set = array_flip(array_keys($ubs_keys)); // Fast lookup
+        $filtered_remote_data = [];
+        foreach ($remote_data as $row) {
+            $key = $row[$remote_key] ?? '';
+            if (!empty($key) && isset($ubs_key_set[$key])) {
+                $filtered_remote_data[] = $row;
+            }
+        }
+        $remote_data = $filtered_remote_data;
+        dump("⚡ Filtered to " . count($remote_data) . " relevant remote records");
+        unset($ubs_key_set, $filtered_remote_data);
     }
 
     // Process remote data
@@ -1825,11 +1828,26 @@ function syncEntity($entity, $ubs_data, $remote_data)
         }
     }
 
-    // Get all unique keys
-    $all_keys = array_unique(array_merge(array_keys($ubs_keys), array_keys($remote_keys)));
-    dump("🔑 Total unique keys to process: " . count($all_keys));
+    // ✅ OPTIMIZATION: If only UBS data exists (no remote), only process UBS keys
+    // If only remote data exists (no UBS), only process remote keys
+    if (empty($ubs_keys)) {
+        // Only remote data - process all remote keys
+        $all_keys = array_keys($remote_keys);
+    } elseif (empty($remote_keys)) {
+        // Only UBS data - process all UBS keys
+        $all_keys = array_keys($ubs_keys);
+    } else {
+        // Both exist - merge keys
+        $all_keys = array_unique(array_merge(array_keys($ubs_keys), array_keys($remote_keys)));
+    }
+    
+    $totalKeys = count($all_keys);
+    dump("🔑 Total unique keys to process: " . $totalKeys);
 
     // Process sync logic efficiently
+    $processedKeys = 0;
+    $progressInterval = max(100, intval($totalKeys / 20)); // Show progress every 5% or every 100 records, whichever is larger
+    
     foreach ($all_keys as $key) {
         $ubs = $ubs_keys[$key] ?? null;
         $remote = $remote_keys[$key] ?? null;
@@ -1879,6 +1897,14 @@ function syncEntity($entity, $ubs_data, $remote_data)
                 logSyncConflict($entity, $key, $ubs_updated_on, $remote_updated_on);
                 // No sync needed - both are already in sync
             }
+        }
+        
+        $processedKeys++;
+        // Show progress every N records
+        if ($processedKeys % $progressInterval === 0 || $processedKeys === $totalKeys) {
+            $percentage = round(($processedKeys / $totalKeys) * 100, 1);
+            $memory = getMemoryUsage();
+            dump("⏳ Processing keys: $processedKeys/$totalKeys ($percentage%) - Memory: " . $memory['memory_usage_mb'] . "MB");
         }
     }
 

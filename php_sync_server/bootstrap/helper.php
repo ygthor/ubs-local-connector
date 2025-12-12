@@ -374,7 +374,7 @@ function retryOperation($operation, $maxRetries = 3, $baseDelay = 100000) {
 /**
  * ✅ SAFE: Fetch remote data incrementally by keys (optimized)
  * @param string $table Table name
- * @param array $keys Array of primary keys to fetch
+ * @param array $keys Array of primary keys to fetch (can be simple keys or composite keys in "key1|key2" format)
  * @param string $updatedAfter Optional timestamp filter
  * @return array Remote data
  */
@@ -391,14 +391,37 @@ function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null) {
         $remote_key = Converter::primaryKey($remote_table_name);
         $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
         
-        // Build safe IN clause
-        $escaped_keys = array_map(function($key) use ($db) {
-            return "'" . $db->escape($key) . "'";
-        }, $keys);
+        $is_composite_key = is_array($remote_key);
         
-        $keys_str = implode(',', $escaped_keys);
-        
-        $sql = "SELECT * FROM `$remote_table_name` WHERE `$remote_key` IN ($keys_str)";
+        if ($is_composite_key) {
+            // Handle composite keys (e.g., REFNO + ITEMCOUNT)
+            // Keys are in format "key1|key2"
+            $conditions = [];
+            foreach ($keys as $key) {
+                $keyParts = explode('|', $key);
+                if (count($keyParts) === count($remote_key)) {
+                    $keyConditions = [];
+                    foreach ($remote_key as $index => $keyField) {
+                        $keyConditions[] = "`$keyField` = '" . $db->escape($keyParts[$index]) . "'";
+                    }
+                    $conditions[] = "(" . implode(' AND ', $keyConditions) . ")";
+                }
+            }
+            
+            if (empty($conditions)) {
+                return [];
+            }
+            
+            $sql = "SELECT * FROM `$remote_table_name` WHERE " . implode(' OR ', $conditions);
+        } else {
+            // Handle simple keys
+            $escaped_keys = array_map(function($key) use ($db) {
+                return "'" . $db->escape($key) . "'";
+            }, $keys);
+            
+            $keys_str = implode(',', $escaped_keys);
+            $sql = "SELECT * FROM `$remote_table_name` WHERE `$remote_key` IN ($keys_str)";
+        }
         
         if ($updatedAfter) {
             $sql .= " AND `$column_updated_at` > '" . $db->escape($updatedAfter) . "'";

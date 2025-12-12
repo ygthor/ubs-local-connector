@@ -333,11 +333,45 @@ try {
                 // For icgroup, preserve NULL values
                 $ubs_data = validateAndFixUpdatedOn($ubs_data, $ubs_table);
                 
-                ProgressDisplay::info("Syncing " . count($ubs_data) . " UBS records with " . count($remote_data) . " remote records");
+                // ✅ OPTIMIZATION: Only fetch remote records that match current UBS chunk keys
+                // This avoids loading all 17,941 remote records for every 500-record chunk
+                $chunk_remote_data = [];
+                if (!empty($remote_data) && count($remote_data) > 1000) {
+                    // Extract keys from current UBS chunk
+                    $ubs_key = Converter::primaryKey($ubs_table);
+                    $is_composite_key = is_array($ubs_key);
+                    $chunk_keys = [];
+                    
+                    foreach ($ubs_data as $row) {
+                        if ($is_composite_key) {
+                            $composite_keys = [];
+                            foreach ($ubs_key as $k) {
+                                $composite_keys[] = $row[$k] ?? '';
+                            }
+                            $key = implode('|', $composite_keys);
+                        } else {
+                            $key = $row[$ubs_key] ?? '';
+                        }
+                        if (!empty($key)) {
+                            $chunk_keys[] = $key;
+                        }
+                    }
+                    
+                    // Fetch only matching remote records
+                    if (!empty($chunk_keys)) {
+                        $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, $isForceSync ? null : $last_synced_at);
+                        ProgressDisplay::info("⚡ Optimized: Fetched " . count($chunk_remote_data) . " matching remote records (from " . count($remote_data) . " total) for this chunk");
+                    }
+                } else {
+                    // Use all remote_data if it's small enough (< 1000 records)
+                    $chunk_remote_data = $remote_data;
+                }
+                
+                ProgressDisplay::info("Syncing " . count($ubs_data) . " UBS records with " . count($chunk_remote_data) . " remote records");
                 
                 // Debug output removed - loop issue fixed with ORDER BY clause
                 // echo "🔍 About to call syncEntity for $ubs_table\n";
-                $comparedData = syncEntity($ubs_table, $ubs_data, $remote_data);
+                $comparedData = syncEntity($ubs_table, $ubs_data, $chunk_remote_data);
 
                 // dd($comparedData);
                 
