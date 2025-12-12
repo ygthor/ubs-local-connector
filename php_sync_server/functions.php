@@ -2760,12 +2760,220 @@ function linkCustomersToUsers($db_remote = null)
         }
         
         ProgressDisplay::info("✅ Customer-User linking completed:");
-        ProgressDisplay::info("   - Linked: $linkedCount");
-        ProgressDisplay::info("   - Already linked: $existingCount");
-        ProgressDisplay::info("   - Skipped (no match): $skippedCount");
+}
+
+/**
+ * Validate and clean up duplicate orders and order_items
+ * This function should be called after sync completes to ensure no duplicates exist
+ * 
+ * @return array Statistics about duplicates found and cleaned
+ */
+function validateAndCleanDuplicateOrders()
+{
+    ProgressDisplay::info("🔍 Starting duplicate orders and order_items validation...");
+    
+    $db = new mysql();
+    $db->connect_remote();
+    
+    $total_stats = [
+        'orders' => [
+            'duplicate_groups' => 0,
+            'total_duplicates' => 0,
+            'deleted_records' => 0
+        ],
+        'order_items' => [
+            'duplicate_groups' => 0,
+            'total_duplicates' => 0,
+            'deleted_records' => 0
+        ]
+    ];
+    
+    // ============================================
+    // 1. VALIDATE ORDERS (by reference_no)
+    // ============================================
+    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    ProgressDisplay::info("📦 Checking for duplicate ORDERS...");
+    
+    $duplicates_sql = "
+        SELECT reference_no, COUNT(*) as count, GROUP_CONCAT(id ORDER BY updated_at DESC, id DESC) as ids
+        FROM orders 
+        WHERE reference_no IS NOT NULL AND reference_no != ''
+        GROUP BY reference_no 
+        HAVING COUNT(*) > 1
+        ORDER BY count DESC
+    ";
+    
+    $duplicate_groups = $db->get($duplicates_sql);
+    
+    if (empty($duplicate_groups)) {
+        ProgressDisplay::info("✅ No duplicate orders found. All reference_no values are unique.");
+    } else {
+        $total_duplicate_groups = count($duplicate_groups);
+        $total_duplicates = 0;
+        $total_deleted = 0;
         
-    } catch (Exception $e) {
-        ProgressDisplay::error("❌ Error linking customers to users: " . $e->getMessage());
-        // Don't throw - allow sync to continue even if linking fails
+        ProgressDisplay::warning("⚠️  Found $total_duplicate_groups duplicate reference_no group(s)");
+        
+        foreach ($duplicate_groups as $group) {
+            $reference_no = $group['reference_no'];
+            $count = (int)$group['count'];
+            $ids = explode(',', $group['ids']);
+            
+            $total_duplicates += ($count - 1); // Minus 1 because we keep one
+            
+            ProgressDisplay::info("  📋 reference_no '$reference_no': $count duplicate(s) found (IDs: " . implode(', ', $ids) . ")");
+            
+            // Get all records with this reference_no, sorted by most recent first
+            $records_sql = "
+                SELECT id, updated_at, created_at 
+                FROM orders 
+                WHERE reference_no = '" . $db->escape($reference_no) . "'
+                ORDER BY updated_at DESC, id DESC
+            ";
+            
+            $records = $db->get($records_sql);
+            
+            if (count($records) > 1) {
+                // Keep the first (most recent) record
+                $keep_record = $records[0];
+                $keep_id = $keep_record['id'];
+                
+                // Delete all other duplicates
+                $delete_ids = [];
+                foreach (array_slice($records, 1) as $record) {
+                    $delete_ids[] = (int)$record['id'];
+                }
+                
+                if (!empty($delete_ids)) {
+                    $delete_ids_str = implode(',', $delete_ids);
+                    $delete_sql = "DELETE FROM orders WHERE id IN ($delete_ids_str)";
+                    $db->query($delete_sql);
+                    
+                    $deleted_count = count($delete_ids);
+                    $total_deleted += $deleted_count;
+                    
+                    ProgressDisplay::info("    ✅ Kept ID: $keep_id (most recent), deleted $deleted_count duplicate(s): " . implode(', ', $delete_ids));
+                    
+                    // Also delete associated order_items for deleted orders
+                    $order_items_delete_sql = "DELETE FROM order_items WHERE order_id IN ($delete_ids_str)";
+                    $db->query($order_items_delete_sql);
+                    $affected_items = mysqli_affected_rows($db->con);
+                    if ($affected_items > 0) {
+                        ProgressDisplay::info("    🗑️  Also deleted $affected_items associated order_item(s)");
+                    }
+                }
+            }
+        }
+        
+        $total_stats['orders'] = [
+            'duplicate_groups' => $total_duplicate_groups,
+            'total_duplicates' => $total_duplicates,
+            'deleted_records' => $total_deleted
+        ];
     }
+    
+    // ============================================
+    // 2. VALIDATE ORDER_ITEMS (by unique_key)
+    // ============================================
+    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    ProgressDisplay::info("📦 Checking for duplicate ORDER_ITEMS...");
+    
+    $order_items_duplicates_sql = "
+        SELECT unique_key, COUNT(*) as count, GROUP_CONCAT(id ORDER BY updated_at DESC, id DESC) as ids
+        FROM order_items 
+        WHERE unique_key IS NOT NULL AND unique_key != ''
+        GROUP BY unique_key 
+        HAVING COUNT(*) > 1
+        ORDER BY count DESC
+    ";
+    
+    $order_items_duplicate_groups = $db->get($order_items_duplicates_sql);
+    
+    if (empty($order_items_duplicate_groups)) {
+        ProgressDisplay::info("✅ No duplicate order_items found. All unique_key values are unique.");
+    } else {
+        $total_duplicate_groups = count($order_items_duplicate_groups);
+        $total_duplicates = 0;
+        $total_deleted = 0;
+        
+        ProgressDisplay::warning("⚠️  Found $total_duplicate_groups duplicate unique_key group(s) in order_items");
+        
+        foreach ($order_items_duplicate_groups as $group) {
+            $unique_key = $group['unique_key'];
+            $count = (int)$group['count'];
+            $ids = explode(',', $group['ids']);
+            
+            $total_duplicates += ($count - 1); // Minus 1 because we keep one
+            
+            ProgressDisplay::info("  📋 unique_key '$unique_key': $count duplicate(s) found (IDs: " . implode(', ', $ids) . ")");
+            
+            // Get all records with this unique_key, sorted by most recent first
+            $records_sql = "
+                SELECT id, updated_at, created_at, order_id, reference_no
+                FROM order_items 
+                WHERE unique_key = '" . $db->escape($unique_key) . "'
+                ORDER BY updated_at DESC, id DESC
+            ";
+            
+            $records = $db->get($records_sql);
+            
+            if (count($records) > 1) {
+                // Keep the first (most recent) record
+                $keep_record = $records[0];
+                $keep_id = $keep_record['id'];
+                
+                // Delete all other duplicates
+                $delete_ids = [];
+                foreach (array_slice($records, 1) as $record) {
+                    $delete_ids[] = (int)$record['id'];
+                }
+                
+                if (!empty($delete_ids)) {
+                    $delete_ids_str = implode(',', $delete_ids);
+                    $delete_sql = "DELETE FROM order_items WHERE id IN ($delete_ids_str)";
+                    $db->query($delete_sql);
+                    
+                    $deleted_count = count($delete_ids);
+                    $total_deleted += $deleted_count;
+                    
+                    ProgressDisplay::info("    ✅ Kept ID: $keep_id (most recent), deleted $deleted_count duplicate(s): " . implode(', ', $delete_ids));
+                }
+            }
+        }
+        
+        $total_stats['order_items'] = [
+            'duplicate_groups' => $total_duplicate_groups,
+            'total_duplicates' => $total_duplicates,
+            'deleted_records' => $total_deleted
+        ];
+    }
+    
+    // ============================================
+    // 3. SUMMARY
+    // ============================================
+    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    ProgressDisplay::info("📊 Duplicate Validation Summary:");
+    ProgressDisplay::info("  ORDERS:");
+    ProgressDisplay::info("    • Duplicate groups: " . $total_stats['orders']['duplicate_groups']);
+    ProgressDisplay::info("    • Total duplicates: " . $total_stats['orders']['total_duplicates']);
+    ProgressDisplay::info("    • Records deleted: " . $total_stats['orders']['deleted_records']);
+    ProgressDisplay::info("  ORDER_ITEMS:");
+    ProgressDisplay::info("    • Duplicate groups: " . $total_stats['order_items']['duplicate_groups']);
+    ProgressDisplay::info("    • Total duplicates: " . $total_stats['order_items']['total_duplicates']);
+    ProgressDisplay::info("    • Records deleted: " . $total_stats['order_items']['deleted_records']);
+    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
+    $total_deleted_all = $total_stats['orders']['deleted_records'] + $total_stats['order_items']['deleted_records'];
+    
+    if ($total_deleted_all > 0) {
+        ProgressDisplay::complete("✅ Duplicate validation completed. Cleaned up " . $total_stats['orders']['deleted_records'] . " order(s) and " . $total_stats['order_items']['deleted_records'] . " order_item(s).");
+    } else {
+        ProgressDisplay::info("✅ Duplicate validation completed. No cleanup needed.");
+    }
+    
+    return [
+        'orders' => $total_stats['orders'],
+        'order_items' => $total_stats['order_items'],
+        'total_deleted' => $total_deleted_all
+    ];
 }

@@ -141,12 +141,37 @@ class mysql
 		$sql_condition = '';
 		foreach ($condition as $key => $val) {
 			if (is_array($val)) {
-				$sql_condition .= " AND $key IN (" . implode(',', $val) . ")";
+				$sql_condition .= " AND `$key` IN (" . implode(',', $val) . ")";
 			} else if ($val === null) {
-				$sql_condition .= " AND $key IS NULL";
+				$sql_condition .= " AND `$key` IS NULL";
 			} else {
-				$sql_condition .= " AND $key = '$val'";
+				$sql_condition .= " AND `$key` = '" . $this->escape($val) . "'";
 			}
+		}
+
+		// ✅ FIX: For orders table with reference_no, ensure we only update ONE record
+		// If multiple records match, delete duplicates first, then update the remaining one
+		if (strpos($str_table_name, 'orders') !== false && isset($condition['reference_no'])) {
+			// First check if there are multiple records
+			$check_duplicates_sql = "SELECT id, updated_at FROM $str_table_name WHERE 1 $sql_condition ORDER BY updated_at DESC, id DESC";
+			$duplicates = $this->get($check_duplicates_sql);
+			
+			if (count($duplicates) > 1) {
+				// Multiple records found - delete old ones, keep most recent
+				$keep_id = $duplicates[0]['id'];
+				$delete_ids = array_column(array_slice($duplicates, 1), 'id');
+				
+				if (!empty($delete_ids)) {
+					$delete_ids_str = implode(',', array_map('intval', $delete_ids));
+					$delete_sql = "DELETE FROM $str_table_name WHERE id IN ($delete_ids_str)";
+					$this->query($delete_sql);
+					dump("⚠️  Deleted " . count($delete_ids) . " duplicate order(s) before update, kept ID: $keep_id");
+				}
+				
+				// Now update only the remaining record by ID (more specific condition)
+				$sql_condition = " AND id = $keep_id";
+			}
+			// If only one record exists, proceed with normal update
 		}
 
 		$sql = "
@@ -407,8 +432,32 @@ class mysql
 			
 			// Skip if record already exists (we'll update it separately)
 			if ($key_value !== null && isset($existing_keys[$key_value])) {
-				// Record exists, update it instead
-				$this->update($table, [$primaryKey => $key_value], $record);
+				// ✅ FIX: Record exists - first ensure only ONE record exists (delete duplicates)
+				$existing = $existing_keys[$key_value];
+				if (count($existing) > 1) {
+					// Multiple duplicates found - delete all except the most recent
+					usort($existing, function($a, $b) {
+						$time_a = isset($a['updated_at']) ? strtotime($a['updated_at']) : 0;
+						$time_b = isset($b['updated_at']) ? strtotime($b['updated_at']) : 0;
+						return $time_b <=> $time_a;
+					});
+					
+					$keep_id = $existing[0]['id'];
+					$delete_ids = array_column(array_slice($existing, 1), 'id');
+					
+					if (!empty($delete_ids)) {
+						$delete_ids_str = implode(',', array_map('intval', $delete_ids));
+						$delete_sql = "DELETE FROM $table_name WHERE id IN ($delete_ids_str)";
+						$this->query($delete_sql);
+						dump("⚠️  Deleted " . count($delete_ids) . " duplicate record(s) with $primaryKey='$key_value', kept ID: $keep_id");
+					}
+					
+					// Update the remaining record
+					$this->update($table, [$primaryKey => $key_value], $record);
+				} else {
+					// Only one record exists, update it
+					$this->update($table, [$primaryKey => $key_value], $record);
+				}
 				continue;
 			}
 			
@@ -434,6 +483,64 @@ class mysql
 		// Only insert if there are new records
 		if (empty($values)) {
 			return true; // All records already existed and were updated
+		}
+		
+		// ✅ FIX: Final safety check - verify records don't exist right before insert
+		// This catches any records that might have been inserted between our check and now
+		if (!empty($primaryKey) && !empty($records_to_insert)) {
+			$final_check_keys = [];
+			$record_key_map = []; // Map key_value to record index
+			
+			foreach ($records_to_insert as $idx => $record) {
+				$key_value = $record[$primaryKey] ?? null;
+				if ($key_value !== null) {
+					$final_check_keys[] = "'" . $this->escape($key_value) . "'";
+					if (!isset($record_key_map[$key_value])) {
+						$record_key_map[$key_value] = [];
+					}
+					$record_key_map[$key_value][] = $idx;
+				}
+			}
+			
+			if (!empty($final_check_keys)) {
+				$final_check_sql = "SELECT `$primaryKey`, id FROM $table_name WHERE `$primaryKey` IN (" . implode(',', array_unique($final_check_keys)) . ")";
+				$final_existing = $this->get($final_check_sql);
+				
+				// Remove records that now exist from the insert list
+				if (!empty($final_existing)) {
+					$existing_key_values = array_column($final_existing, $primaryKey);
+					$indices_to_remove = [];
+					
+					foreach ($existing_key_values as $existing_key) {
+						if (isset($record_key_map[$existing_key])) {
+							foreach ($record_key_map[$existing_key] as $idx) {
+								$indices_to_remove[$idx] = true;
+								// Record now exists, update it instead
+								$this->update($table, [$primaryKey => $existing_key], $records_to_insert[$idx]);
+								dump("⚠️  Record with $primaryKey='$existing_key' was inserted between check and insert - updated instead");
+							}
+						}
+					}
+					
+					// Rebuild arrays without the records that now exist
+					$new_records_to_insert = [];
+					$new_values = [];
+					
+					foreach ($records_to_insert as $idx => $record) {
+						if (!isset($indices_to_remove[$idx])) {
+							$new_records_to_insert[] = $record;
+							$new_values[] = $values[$idx];
+						}
+					}
+					
+					$records_to_insert = $new_records_to_insert;
+					$values = $new_values;
+					
+					if (empty($values)) {
+						return true; // All records were updated instead
+					}
+				}
+			}
 		}
 		
 		// Execute bulk insert (no ON DUPLICATE KEY UPDATE since we checked already)
