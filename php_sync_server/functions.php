@@ -267,6 +267,37 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         }
     }
 
+    // ✅ FIX: Deduplicate records within the batch (keep most recent for orders)
+    if ($remote_table_name == 'orders' && !empty($processedRecords)) {
+        $deduplicated = [];
+        $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
+        
+        foreach ($processedRecords as $record) {
+            $key = $record[$primary_key] ?? '';
+            if (empty($key)) {
+                continue;
+            }
+            
+            if (!isset($deduplicated[$key])) {
+                $deduplicated[$key] = $record;
+            } else {
+                // Compare timestamps and keep the most recent
+                $existing_time = isset($deduplicated[$key][$column_updated_at]) ? strtotime($deduplicated[$key][$column_updated_at]) : 0;
+                $new_time = isset($record[$column_updated_at]) ? strtotime($record[$column_updated_at]) : 0;
+                
+                if ($new_time > $existing_time) {
+                    dump("⚠️  Duplicate reference_no '$key' in batch - keeping more recent record");
+                    $deduplicated[$key] = $record;
+                }
+            }
+        }
+        
+        $processedRecords = array_values($deduplicated);
+        if (count($processedRecords) < $totalRecords) {
+            dump("ℹ️  Deduplicated batch: " . count($processedRecords) . " unique records out of $totalRecords");
+        }
+    }
+
     // Use bulk upsert for better performance
     for ($i = 0; $i < count($processedRecords); $i += $batchSize) {
         $batch = array_slice($processedRecords, $i, $batchSize);
@@ -1800,9 +1831,34 @@ function syncEntity($entity, $ubs_data, $remote_data)
     }
 
     // Process remote data
+    // ✅ FIX: Handle duplicate keys properly - keep the most recent one
     foreach ($remote_data as $row) {
         $key = $row[$remote_key] ?? '';
-        $remote_keys[$key] = $row;
+        
+        if (empty($key)) {
+            continue; // Skip rows with empty keys
+        }
+        
+        // If key already exists, compare timestamps and keep the most recent
+        if (isset($remote_keys[$key])) {
+            $existing_updated_at = $remote_keys[$key][$column_updated_at] ?? null;
+            $new_updated_at = $row[$column_updated_at] ?? null;
+            
+            // Validate timestamps
+            $existing_time = $existing_updated_at ? strtotime($existing_updated_at) : 0;
+            $new_time = $new_updated_at ? strtotime($new_updated_at) : 0;
+            
+            if ($new_time > $existing_time) {
+                // New record is more recent, replace it
+                dump("⚠️  WARNING: Duplicate key '$key' found in remote data. Keeping more recent record (updated_at: $new_updated_at vs $existing_updated_at)");
+                $remote_keys[$key] = $row;
+            } else {
+                // Existing record is more recent or equal, keep it
+                dump("⚠️  WARNING: Duplicate key '$key' found in remote data. Keeping existing record (updated_at: $existing_updated_at vs $new_updated_at)");
+            }
+        } else {
+            $remote_keys[$key] = $row;
+        }
     }
 
     // Get all unique keys
@@ -2109,6 +2165,8 @@ function upsertRemote($table, $record)
             // dd($record);
         }
 
+        // ✅ FIX: update_or_insert now handles duplicates automatically
+        // No need for extra validation here - update_or_insert will check and clean duplicates
         $db->update_or_insert($remote_table_name, [$primary_key => $record[$primary_key]], $record);
     }
 }

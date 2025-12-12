@@ -266,22 +266,69 @@ class mysql
 			return;
 		}
 
-		$sql_check = "SELECT * FROM $table WHERE 1 ";
+		$table_name = strpos($table, '.') !== false ? $table : "`$table`";
+		
+		$sql_check = "SELECT * FROM $table_name WHERE 1 ";
 		foreach ($condition as $key => $val) {
-			$sql_check .= " AND $key = '$val'";
+			$sql_check .= " AND `$key` = '" . $this->escape($val) . "'";
 		}
-		$row_check = $this->first($sql_check);
+		
+		// ✅ FIX: Get ALL matching records, not just first (to handle duplicates)
+		$rows_check = $this->get($sql_check);
 
-		if ($row_check == null) {
+		if (empty($rows_check)) {
+			// No record found, insert new
 			return $this->insert($table, $arr);
 		} else {
-			$result =  $this->update($table, $condition, $arr);
+			// ✅ FIX: If multiple records found (duplicates), delete old ones and keep/update the most recent
+			if (count($rows_check) > 1) {
+				// Find the most recent record (by updated_at or id)
+				$most_recent = null;
+				$most_recent_time = 0;
+				$most_recent_id = 0;
+				
+				foreach ($rows_check as $row) {
+					$updated_at = $row['updated_at'] ?? $row['UPDATED_ON'] ?? null;
+					$row_time = $updated_at ? strtotime($updated_at) : 0;
+					$row_id = $row['id'] ?? 0;
+					
+					if ($row_time > $most_recent_time || ($row_time == $most_recent_time && $row_id > $most_recent_id)) {
+						$most_recent_time = $row_time;
+						$most_recent_id = $row_id;
+						$most_recent = $row;
+					}
+				}
+				
+				// Delete all duplicates except the most recent one
+				$delete_ids = [];
+				foreach ($rows_check as $row) {
+					$row_id = $row['id'] ?? null;
+					if ($row_id && $row_id != $most_recent_id) {
+						$delete_ids[] = (int)$row_id;
+					}
+				}
+				
+				if (!empty($delete_ids)) {
+					$delete_ids_str = implode(',', $delete_ids);
+					$delete_sql = "DELETE FROM $table_name WHERE id IN ($delete_ids_str)";
+					$this->query($delete_sql);
+					dump("⚠️  Deleted " . count($delete_ids) . " duplicate record(s) in $table, kept ID: $most_recent_id");
+				}
+				
+				// Use the most recent record for update
+				$row_check = $most_recent;
+			} else {
+				$row_check = $rows_check[0];
+			}
+			
+			// Update the existing record
+			$result = $this->update($table, $condition, $arr);
 			if ($result === true) {
-				$sql_primary_key = "SHOW KEYS FROM $table WHERE Key_name = 'PRIMARY'";
+				$sql_primary_key = "SHOW KEYS FROM $table_name WHERE Key_name = 'PRIMARY'";
 				$row_primary_key = $this->first($sql_primary_key);
-				$primary_key = $row_primary_key['Column_name'];
+				$primary_key = $row_primary_key['Column_name'] ?? 'id';
 
-				return $row_check[$primary_key];
+				return $row_check[$primary_key] ?? $row_check['id'] ?? null;
 			} else {
 				return $result;
 			}
@@ -297,13 +344,75 @@ class mysql
 
 		$table_name = strpos($table, '.') !== false ? $table : "`$table`";
 		
+		// ✅ FIX: Check for existing records first (since ON DUPLICATE KEY UPDATE requires UNIQUE constraint)
+		// Get all existing keys to prevent duplicates
+		$existing_keys = [];
+		if (!empty($primaryKey)) {
+			$keys_to_check = array_filter(array_column($records, $primaryKey));
+			if (!empty($keys_to_check)) {
+				$keys_escaped = array_map(function($key) {
+					return "'" . $this->escape($key) . "'";
+				}, array_unique($keys_to_check));
+				
+				$check_sql = "SELECT `$primaryKey`, id, updated_at FROM $table_name WHERE `$primaryKey` IN (" . implode(',', $keys_escaped) . ")";
+				$existing_records = $this->get($check_sql);
+				
+				// Group by primary key to find duplicates
+				foreach ($existing_records as $existing) {
+					$key = $existing[$primaryKey] ?? null;
+					if ($key !== null) {
+						if (!isset($existing_keys[$key])) {
+							$existing_keys[$key] = [];
+						}
+						$existing_keys[$key][] = $existing;
+					}
+				}
+				
+				// Delete duplicate records (keep most recent)
+				foreach ($existing_keys as $key => $duplicates) {
+					if (count($duplicates) > 1) {
+						// Sort by updated_at descending, keep first
+						usort($duplicates, function($a, $b) {
+							$time_a = isset($a['updated_at']) ? strtotime($a['updated_at']) : 0;
+							$time_b = isset($b['updated_at']) ? strtotime($b['updated_at']) : 0;
+							return $time_b <=> $time_a;
+						});
+						
+						$keep_id = $duplicates[0]['id'];
+						$delete_ids = array_column(array_slice($duplicates, 1), 'id');
+						
+						if (!empty($delete_ids)) {
+							$delete_ids_str = implode(',', array_map('intval', $delete_ids));
+							$delete_sql = "DELETE FROM $table_name WHERE id IN ($delete_ids_str)";
+							$this->query($delete_sql);
+							dump("⚠️  Deleted " . count($delete_ids) . " duplicate record(s) with $primaryKey='$key', kept ID: $keep_id");
+						}
+						
+						// Keep only the most recent one
+						$existing_keys[$key] = [$duplicates[0]];
+					}
+				}
+			}
+		}
+		
 		// Get all columns from first record
 		$columns = array_keys($records[0]);
 		$columns_str = '`' . implode('`, `', $columns) . '`';
 		
-		// Build VALUES clause
+		// Build VALUES clause - filter out records that already exist
 		$values = [];
+		$records_to_insert = [];
 		foreach ($records as $record) {
+			$key_value = $record[$primaryKey] ?? null;
+			
+			// Skip if record already exists (we'll update it separately)
+			if ($key_value !== null && isset($existing_keys[$key_value])) {
+				// Record exists, update it instead
+				$this->update($table, [$primaryKey => $key_value], $record);
+				continue;
+			}
+			
+			$records_to_insert[] = $record;
 			$record_values = [];
 			foreach ($columns as $column) {
 				$value = $record[$column] ?? null;
@@ -322,18 +431,13 @@ class mysql
 			$values[] = '(' . implode(',', $record_values) . ')';
 		}
 		
-		// Build ON DUPLICATE KEY UPDATE clause
-		$update_clause = [];
-		foreach ($columns as $column) {
-			if ($column !== $primaryKey) {
-				$update_clause[] = "`$column` = VALUES(`$column`)";
-			}
+		// Only insert if there are new records
+		if (empty($values)) {
+			return true; // All records already existed and were updated
 		}
-		$update_str = implode(', ', $update_clause);
 		
-		// Execute bulk upsert
-		$sql = "INSERT INTO $table_name ($columns_str) VALUES " . implode(',', $values) . 
-			   " ON DUPLICATE KEY UPDATE $update_str";
+		// Execute bulk insert (no ON DUPLICATE KEY UPDATE since we checked already)
+		$sql = "INSERT INTO $table_name ($columns_str) VALUES " . implode(',', $values);
 		
 		$this->SQL_EXECUTED[] = $sql;
 		$result = mysqli_query($this->con, $sql);
@@ -351,7 +455,7 @@ class mysql
 		}
 		
 		$affectedRows = mysqli_affected_rows($this->con);
-		if ($affectedRows === 0 && count($records) > 0) {
+		if ($affectedRows === 0 && count($records_to_insert) > 0) {
 			// Warning: No rows affected but we tried to insert
 			dump("WARNING: bulkUpsert executed but 0 rows affected for table $table_name");
 		}
