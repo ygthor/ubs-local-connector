@@ -154,6 +154,17 @@ try {
         $db_remote->close();
     }
 
+    // ============================
+    // Clean up duplicate orders and order_items after sync completes
+    // ============================
+    try {
+        ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        validateAndCleanDuplicateOrders();
+    } catch (Exception $e) {
+        ProgressDisplay::warning("⚠️  Could not validate and clean duplicate orders: " . $e->getMessage());
+        // Don't fail the entire sync if duplicate cleanup fails
+    }
+
     // Log successful sync
     $db->insert('sync_logs', [
         'synced_at' => date('Y-m-d H:i:s')
