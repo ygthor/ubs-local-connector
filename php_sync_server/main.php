@@ -164,7 +164,7 @@ try {
             // startSyncCache($ubs_table, $totalRecordsToProcess);
             
             // Process data in chunks to avoid memory issues
-            $chunkSize = 500; // Reduced chunk size to prevent file lock conflicts
+            $chunkSize = 5000; // Increased from 500 to 5000 for better performance
             $offset = 0;
             $processedRecords = 0;
             $maxIterations = 100; // Safety limit to prevent infinite loops

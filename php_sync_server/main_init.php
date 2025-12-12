@@ -94,7 +94,7 @@ try {
 
         ProgressDisplay::info("Total rows to process: $totalRows");
 
-        $chunkSize = 1000;
+        $chunkSize = 5000; // Increased from 1000 to 5000 for better performance
         $offset = 0;
 
         while ($offset < $totalRows) {
