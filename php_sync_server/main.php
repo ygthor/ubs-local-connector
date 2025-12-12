@@ -494,6 +494,15 @@ try {
     ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     ProgressDisplay::info("📊 TOTALS: Tables: " . count($syncResults) . ", UBS: $totalUbsRecords, Remote: $totalRemoteRecords, Processed: $totalProcessed");
     
+    // ✅ Clean up duplicate orders and order_items after sync completes
+    try {
+        ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        validateAndCleanDuplicateOrders();
+    } catch (Exception $e) {
+        ProgressDisplay::warning("⚠️  Could not validate and clean duplicate orders: " . $e->getMessage());
+        // Don't fail the entire sync if duplicate cleanup fails
+    }
+    
     ProgressDisplay::complete("🎉 Sync process completed successfully! All " . count($syncResults) . " tables processed.");
     
 } catch (Exception $e) {

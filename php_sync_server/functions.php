@@ -2770,6 +2770,9 @@ function linkCustomersToUsers($db_remote = null)
  */
 function validateAndCleanDuplicateOrders()
 {
+    $start_time = microtime(true);
+    $memory_start = getMemoryUsage();
+    
     ProgressDisplay::info("🔍 Starting duplicate orders and order_items validation...");
     
     $db = new mysql();
@@ -2779,18 +2782,23 @@ function validateAndCleanDuplicateOrders()
         'orders' => [
             'duplicate_groups' => 0,
             'total_duplicates' => 0,
-            'deleted_records' => 0
+            'deleted_records' => 0,
+            'execution_time' => 0
         ],
         'order_items' => [
             'duplicate_groups' => 0,
             'total_duplicates' => 0,
-            'deleted_records' => 0
-        ]
+            'deleted_records' => 0,
+            'execution_time' => 0
+        ],
+        'total_execution_time' => 0,
+        'total_queries' => 0
     ];
     
     // ============================================
     // 1. VALIDATE ORDERS (by reference_no)
     // ============================================
+    $orders_start_time = microtime(true);
     ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     ProgressDisplay::info("📦 Checking for duplicate ORDERS...");
     
@@ -2804,6 +2812,7 @@ function validateAndCleanDuplicateOrders()
     ";
     
     $duplicate_groups = $db->get($duplicates_sql);
+    $total_stats['total_queries']++;
     
     if (empty($duplicate_groups)) {
         ProgressDisplay::info("✅ No duplicate orders found. All reference_no values are unique.");
@@ -2832,6 +2841,7 @@ function validateAndCleanDuplicateOrders()
             ";
             
             $records = $db->get($records_sql);
+            $total_stats['total_queries']++;
             
             if (count($records) > 1) {
                 // Keep the first (most recent) record
@@ -2848,6 +2858,7 @@ function validateAndCleanDuplicateOrders()
                     $delete_ids_str = implode(',', $delete_ids);
                     $delete_sql = "DELETE FROM orders WHERE id IN ($delete_ids_str)";
                     $db->query($delete_sql);
+                    $total_stats['total_queries']++;
                     
                     $deleted_count = count($delete_ids);
                     $total_deleted += $deleted_count;
@@ -2857,6 +2868,7 @@ function validateAndCleanDuplicateOrders()
                     // Also delete associated order_items for deleted orders
                     $order_items_delete_sql = "DELETE FROM order_items WHERE order_id IN ($delete_ids_str)";
                     $db->query($order_items_delete_sql);
+                    $total_stats['total_queries']++;
                     $affected_items = mysqli_affected_rows($db->con);
                     if ($affected_items > 0) {
                         ProgressDisplay::info("    🗑️  Also deleted $affected_items associated order_item(s)");
@@ -2872,9 +2884,14 @@ function validateAndCleanDuplicateOrders()
         ];
     }
     
+    $orders_end_time = microtime(true);
+    $total_stats['orders']['execution_time'] = round($orders_end_time - $orders_start_time, 3);
+    ProgressDisplay::info("⏱️  Orders validation completed in " . $total_stats['orders']['execution_time'] . " seconds");
+    
     // ============================================
     // 2. VALIDATE ORDER_ITEMS (by unique_key)
     // ============================================
+    $order_items_start_time = microtime(true);
     ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     ProgressDisplay::info("📦 Checking for duplicate ORDER_ITEMS...");
     
@@ -2888,6 +2905,7 @@ function validateAndCleanDuplicateOrders()
     ";
     
     $order_items_duplicate_groups = $db->get($order_items_duplicates_sql);
+    $total_stats['total_queries']++;
     
     if (empty($order_items_duplicate_groups)) {
         ProgressDisplay::info("✅ No duplicate order_items found. All unique_key values are unique.");
@@ -2916,6 +2934,7 @@ function validateAndCleanDuplicateOrders()
             ";
             
             $records = $db->get($records_sql);
+            $total_stats['total_queries']++;
             
             if (count($records) > 1) {
                 // Keep the first (most recent) record
@@ -2932,6 +2951,7 @@ function validateAndCleanDuplicateOrders()
                     $delete_ids_str = implode(',', $delete_ids);
                     $delete_sql = "DELETE FROM order_items WHERE id IN ($delete_ids_str)";
                     $db->query($delete_sql);
+                    $total_stats['total_queries']++;
                     
                     $deleted_count = count($delete_ids);
                     $total_deleted += $deleted_count;
@@ -2948,32 +2968,54 @@ function validateAndCleanDuplicateOrders()
         ];
     }
     
+    $order_items_end_time = microtime(true);
+    $total_stats['order_items']['execution_time'] = round($order_items_end_time - $order_items_start_time, 3);
+    ProgressDisplay::info("⏱️  Order items validation completed in " . $total_stats['order_items']['execution_time'] . " seconds");
+    
     // ============================================
     // 3. SUMMARY
     // ============================================
+    $end_time = microtime(true);
+    $total_stats['total_execution_time'] = round($end_time - $start_time, 3);
+    $memory_end = getMemoryUsage();
+    $memory_used = round($memory_end['memory_usage_mb'] - $memory_start['memory_usage_mb'], 2);
+    
     ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     ProgressDisplay::info("📊 Duplicate Validation Summary:");
     ProgressDisplay::info("  ORDERS:");
     ProgressDisplay::info("    • Duplicate groups: " . $total_stats['orders']['duplicate_groups']);
     ProgressDisplay::info("    • Total duplicates: " . $total_stats['orders']['total_duplicates']);
     ProgressDisplay::info("    • Records deleted: " . $total_stats['orders']['deleted_records']);
+    ProgressDisplay::info("    • Execution time: " . $total_stats['orders']['execution_time'] . "s");
     ProgressDisplay::info("  ORDER_ITEMS:");
     ProgressDisplay::info("    • Duplicate groups: " . $total_stats['order_items']['duplicate_groups']);
     ProgressDisplay::info("    • Total duplicates: " . $total_stats['order_items']['total_duplicates']);
     ProgressDisplay::info("    • Records deleted: " . $total_stats['order_items']['deleted_records']);
+    ProgressDisplay::info("    • Execution time: " . $total_stats['order_items']['execution_time'] . "s");
+    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    ProgressDisplay::info("⚡ Performance Metrics:");
+    ProgressDisplay::info("    • Total execution time: " . $total_stats['total_execution_time'] . "s");
+    ProgressDisplay::info("    • Total queries executed: " . $total_stats['total_queries']);
+    ProgressDisplay::info("    • Memory used: " . $memory_used . "MB");
     ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     
     $total_deleted_all = $total_stats['orders']['deleted_records'] + $total_stats['order_items']['deleted_records'];
     
     if ($total_deleted_all > 0) {
-        ProgressDisplay::complete("✅ Duplicate validation completed. Cleaned up " . $total_stats['orders']['deleted_records'] . " order(s) and " . $total_stats['order_items']['deleted_records'] . " order_item(s).");
+        ProgressDisplay::complete("✅ Duplicate validation completed. Cleaned up " . $total_stats['orders']['deleted_records'] . " order(s) and " . $total_stats['order_items']['deleted_records'] . " order_item(s) in " . $total_stats['total_execution_time'] . "s.");
     } else {
-        ProgressDisplay::info("✅ Duplicate validation completed. No cleanup needed.");
+        ProgressDisplay::info("✅ Duplicate validation completed. No cleanup needed. (Time: " . $total_stats['total_execution_time'] . "s)");
     }
+    
+    // Close database connection
+    $db->close();
     
     return [
         'orders' => $total_stats['orders'],
         'order_items' => $total_stats['order_items'],
-        'total_deleted' => $total_deleted_all
+        'total_deleted' => $total_deleted_all,
+        'total_execution_time' => $total_stats['total_execution_time'],
+        'total_queries' => $total_stats['total_queries'],
+        'memory_used_mb' => $memory_used
     ];
 }

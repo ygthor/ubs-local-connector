@@ -1,5 +1,3 @@
-Add-Type -AssemblyName System.Windows.Forms
-
 # ============================
 # Startup Banner
 # ============================
@@ -41,20 +39,16 @@ $running = Get-Process -ErrorAction SilentlyContinue |
            Where-Object { $targetPrograms -contains $_.ProcessName }
 
 if ($running) {
-    Write-Progress -Activity "KBS Sync Test" -Completed
     $names = ($running.ProcessName | Sort-Object -Unique) -join ", "
-    Write-Host "Warning: Detected running programs: $names" -ForegroundColor Red
-    [System.Windows.Forms.MessageBox]::Show(
-        "Please close the following program(s) before running the tasks:`n$names",
-        "Close Programs First",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-    )
-    exit 0
+    Write-Host "`n╔════════════════════════════════════════╗" -ForegroundColor Yellow
+    Write-Host "║      WARNING - PROGRAMS DETECTED       ║" -ForegroundColor Yellow
+    Write-Host "╚════════════════════════════════════════╝" -ForegroundColor Yellow
+    Write-Host "Detected running programs: $names" -ForegroundColor Yellow
+    Write-Host "Continuing anyway...`n" -ForegroundColor Gray
+} else {
+    Write-Progress -Activity "KBS Sync Test" -Status "No conflicting programs detected" -PercentComplete 10
+    Write-Host "No conflicting programs detected. Proceeding...`n" -ForegroundColor Green
 }
-
-Write-Progress -Activity "KBS Sync Test" -Status "No conflicting programs detected" -PercentComplete 10
-Write-Host "No conflicting programs detected. Proceeding...`n" -ForegroundColor Green
 
 # ============================
 # Function: Delete & recreate task
