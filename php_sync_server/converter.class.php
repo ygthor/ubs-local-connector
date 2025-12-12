@@ -5,9 +5,7 @@ class Converter
     static function ubsTable()
     {
         $dbf_arr = [
-            'ubs_ubsacc2015_arcust',
-            'ubs_ubsstk2015_artran', // invoice
-            'ubs_ubsstk2015_ictran', // invoice item
+            
             'ubs_ubsacc2015_gldata', // statement
 
             // 'ubs_ubsacc2015_apvend',
@@ -26,6 +24,9 @@ class Converter
             'ubs_ubsstk2015_icitem', // product/item
             'ubs_ubsstk2015_icgroup', // product group - synced from icgroup.dbf
             // 'ubs_ubsstk2015_ictran',
+            'ubs_ubsacc2015_arcust',
+            'ubs_ubsstk2015_artran', // invoice
+            'ubs_ubsstk2015_ictran', // invoice item
 
             
         ];
