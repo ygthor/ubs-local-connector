@@ -381,6 +381,12 @@ class mysql
 
 		$table_name = strpos($table, '.') !== false ? $table : "`$table`";
 		
+		// ✅ FIX: Determine if we need 'id' column based on primary key
+		// If primary key IS 'id', we need it. If primary key is something else (like 'ITEMNO'), 
+		// the table likely doesn't have an auto-increment 'id' column
+		$primary_key_is_id = (strtolower($primaryKey) === 'id');
+		$has_id_column = $primary_key_is_id; // Assume id exists only if it's the primary key
+		
 		// ✅ FIX: Check for existing records first (since ON DUPLICATE KEY UPDATE requires UNIQUE constraint)
 		// Get all existing keys to prevent duplicates
 		$existing_keys = [];
@@ -391,7 +397,19 @@ class mysql
 					return "'" . $this->escape($key) . "'";
 				}, array_unique($keys_to_check));
 				
-				$check_sql = "SELECT `$primaryKey`, id, updated_at FROM $table_name WHERE `$primaryKey` IN (" . implode(',', $keys_escaped) . ")";
+				// Build SELECT query - only include 'id' if primary key is 'id'
+				// For tables like icitem (PK=ITEMNO), we don't need 'id'
+				$select_fields = ["`$primaryKey`"];
+				
+				// Only add 'id' if primary key is 'id' (tables with auto-increment id)
+				if ($primary_key_is_id) {
+					$select_fields[] = 'id';
+				}
+				
+				// Try to include updated_at/UPDATED_ON for duplicate detection
+				$select_fields[] = 'COALESCE(updated_at, UPDATED_ON) as updated_at';
+				
+				$check_sql = "SELECT " . implode(', ', $select_fields) . " FROM $table_name WHERE `$primaryKey` IN (" . implode(',', $keys_escaped) . ")";
 				$existing_records = $this->get($check_sql);
 				
 				// Group by primary key to find duplicates
@@ -415,14 +433,22 @@ class mysql
 							return $time_b <=> $time_a;
 						});
 						
-						$keep_id = $duplicates[0]['id'];
-						$delete_ids = array_column(array_slice($duplicates, 1), 'id');
-						
-						if (!empty($delete_ids)) {
-							$delete_ids_str = implode(',', array_map('intval', $delete_ids));
-							$delete_sql = "DELETE FROM $table_name WHERE id IN ($delete_ids_str)";
-							$this->query($delete_sql);
-							dump("⚠️  Deleted " . count($delete_ids) . " duplicate record(s) with $primaryKey='$key', kept ID: $keep_id");
+						// ✅ FIX: Only delete duplicates if primary key is 'id' (table has auto-increment id)
+						// For tables without 'id' (like icitem with PK=ITEMNO), duplicates shouldn't exist if primary key is unique
+						if ($primary_key_is_id) {
+							$keep_id = $duplicates[0]['id'] ?? null;
+							$delete_ids = array_column(array_slice($duplicates, 1), 'id');
+							
+							if (!empty($delete_ids) && $keep_id !== null) {
+								$delete_ids_str = implode(',', array_map('intval', $delete_ids));
+								$delete_sql = "DELETE FROM $table_name WHERE id IN ($delete_ids_str)";
+								$this->query($delete_sql);
+								dump("⚠️  Deleted " . count($delete_ids) . " duplicate record(s) with $primaryKey='$key', kept ID: $keep_id");
+							}
+						} else {
+							// No id column - just keep the first (most recent) duplicate
+							// Note: This shouldn't happen if primary key is unique, but handle it gracefully
+							dump("⚠️  Found " . count($duplicates) . " duplicate(s) with $primaryKey='$key' (table uses $primaryKey as PK, keeping most recent)");
 						}
 						
 						// Keep only the most recent one
@@ -459,14 +485,17 @@ class mysql
 						return $time_b <=> $time_a;
 					});
 					
-					$keep_id = $existing[0]['id'];
-					$delete_ids = array_column(array_slice($existing, 1), 'id');
-					
-					if (!empty($delete_ids)) {
-						$delete_ids_str = implode(',', array_map('intval', $delete_ids));
-						$delete_sql = "DELETE FROM $table_name WHERE id IN ($delete_ids_str)";
-						$this->query($delete_sql);
-						dump("⚠️  Deleted " . count($delete_ids) . " duplicate record(s) with $primaryKey='$key_value', kept ID: $keep_id");
+					// ✅ FIX: Only delete duplicates if primary key is 'id' (table has auto-increment id)
+					if ($primary_key_is_id) {
+						$keep_id = $existing[0]['id'] ?? null;
+						$delete_ids = array_column(array_slice($existing, 1), 'id');
+						
+						if (!empty($delete_ids) && $keep_id !== null) {
+							$delete_ids_str = implode(',', array_map('intval', $delete_ids));
+							$delete_sql = "DELETE FROM $table_name WHERE id IN ($delete_ids_str)";
+							$this->query($delete_sql);
+							dump("⚠️  Deleted " . count($delete_ids) . " duplicate record(s) with $primaryKey='$key_value', kept ID: $keep_id");
+						}
 					}
 					
 					// Update the remaining record
@@ -524,7 +553,12 @@ class mysql
 			}
 			
 			if (!empty($final_check_keys)) {
-				$final_check_sql = "SELECT `$primaryKey`, id FROM $table_name WHERE `$primaryKey` IN (" . implode(',', array_unique($final_check_keys)) . ")";
+				// ✅ FIX: Only select 'id' if primary key is 'id'
+				$select_fields = ["`$primaryKey`"];
+				if ($primary_key_is_id) {
+					$select_fields[] = 'id';
+				}
+				$final_check_sql = "SELECT " . implode(', ', $select_fields) . " FROM $table_name WHERE `$primaryKey` IN (" . implode(',', array_unique($final_check_keys)) . ")";
 				$final_existing = $this->get($final_check_sql);
 				
 				// Remove records that now exist from the insert list
