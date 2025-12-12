@@ -380,12 +380,18 @@ class mysql
 		}
 
 		$table_name = strpos($table, '.') !== false ? $table : "`$table`";
+		// Get clean table name (without backticks) for SHOW COLUMNS queries
+		$table_name_clean = str_replace(['`'], '', $table_name);
+		if (strpos($table_name_clean, '.') !== false) {
+			$parts = explode('.', $table_name_clean);
+			$table_name_clean = $parts[1] ?? $parts[0];
+		}
 		
-		// ✅ FIX: Determine if we need 'id' column based on primary key
-		// If primary key IS 'id', we need it. If primary key is something else (like 'ITEMNO'), 
-		// the table likely doesn't have an auto-increment 'id' column
-		$primary_key_is_id = (strtolower($primaryKey) === 'id');
-		$has_id_column = $primary_key_is_id; // Assume id exists only if it's the primary key
+		// ✅ FIX: Use primary key info to determine if we need 'id' column
+		// If primary key IS 'id', the table uses auto-increment id as PK → we need 'id'
+		// If primary key is NOT 'id' (like 'ITEMNO', 'ACCNO', 'name'), table doesn't use 'id' as PK → don't use 'id'
+		// This uses the primaryKey() function from Converter to make the decision
+		$primary_key_is_id = !empty($primaryKey) && strtolower($primaryKey) === 'id';
 		
 		// ✅ FIX: Check for existing records first (since ON DUPLICATE KEY UPDATE requires UNIQUE constraint)
 		// Get all existing keys to prevent duplicates
@@ -397,20 +403,62 @@ class mysql
 					return "'" . $this->escape($key) . "'";
 				}, array_unique($keys_to_check));
 				
-				// Build SELECT query - only include 'id' if primary key is 'id'
-				// For tables like icitem (PK=ITEMNO), we don't need 'id'
+				// Build SELECT query based on primary key from Converter::primaryKey()
+				// If primary key is NOT 'id' (like 'ITEMNO' for icitem), table doesn't use 'id' → don't select it
 				$select_fields = ["`$primaryKey`"];
 				
-				// Only add 'id' if primary key is 'id' (tables with auto-increment id)
+				// Only add 'id' if primary key IS 'id' (tables with auto-increment id as primary key)
+				// This uses Converter::primaryKey() to determine if table has 'id' column
 				if ($primary_key_is_id) {
 					$select_fields[] = 'id';
 				}
 				
-				// Try to include updated_at/UPDATED_ON for duplicate detection
-				$select_fields[] = 'COALESCE(updated_at, UPDATED_ON) as updated_at';
+				// ✅ FIX: Use Converter::mapUpdatedAtField() to safely determine timestamp column
+				// This is much safer than querying the database schema
+				// Convert table name to remote table name if needed (for local tables like ubs_ubsstk2015_icitem)
+				$remote_table_name = Converter::table_convert_remote($table);
+				$table_for_mapping = $remote_table_name ? $remote_table_name : $table_name_clean;
+				
+				// Get the correct timestamp field name from the mapping
+				// Returns 'updated_at' (default) or 'UPDATED_ON' for specific tables like gldata, icitem, icgroup
+				$timestamp_field = Converter::mapUpdatedAtField($table_for_mapping);
+				
+				// Add timestamp field to SELECT query
+				// The mapping function already handles the correct field name, so we can safely use it
+				$select_fields[] = "`$timestamp_field` as updated_at";
 				
 				$check_sql = "SELECT " . implode(', ', $select_fields) . " FROM $table_name WHERE `$primaryKey` IN (" . implode(',', $keys_escaped) . ")";
-				$existing_records = $this->get($check_sql);
+				
+				// ✅ FIX: Execute query with error handling - if column doesn't exist, retry without timestamp
+				// This is a safety fallback in case the mapping doesn't match the actual schema
+				$existing_records = [];
+				$query_result = $this->query($check_sql);
+				
+				if ($query_result === false) {
+					$error = mysqli_error($this->con);
+					// If error is about unknown column for timestamp field, retry without it
+					if (strpos($error, 'Unknown column') !== false && strpos($error, $timestamp_field) !== false) {
+						// Remove timestamp field and retry with just primary key (and id if needed)
+						$select_fields_simple = ["`$primaryKey`"];
+						if ($primary_key_is_id) {
+							$select_fields_simple[] = 'id';
+						}
+						$check_sql = "SELECT " . implode(', ', $select_fields_simple) . " FROM $table_name WHERE `$primaryKey` IN (" . implode(',', $keys_escaped) . ")";
+						$query_result = $this->query($check_sql);
+						if ($query_result === false) {
+							throw new Exception("Failed to query existing records: " . mysqli_error($this->con));
+						}
+						// Set updated_at to null since we couldn't fetch it
+						$existing_records = $this->get($query_result);
+						foreach ($existing_records as &$record) {
+							$record['updated_at'] = null;
+						}
+					} else {
+						throw new Exception("Failed to query existing records: " . $error);
+					}
+				} else {
+					$existing_records = $this->get($query_result);
+				}
 				
 				// Group by primary key to find duplicates
 				foreach ($existing_records as $existing) {
