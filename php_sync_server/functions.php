@@ -260,6 +260,24 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         // This prevents "Column 'id' cannot be null" errors
         unset($record['id']);
         unset($record['ID']);
+        
+        // ✅ FIX: Ensure updated_at is always set (required for remote tables like gldata)
+        // If missing or invalid, use current timestamp
+        if (!isset($record['updated_at']) || empty($record['updated_at']) || 
+            $record['updated_at'] === '0000-00-00' || 
+            $record['updated_at'] === '0000-00-00 00:00:00' ||
+            strtotime($record['updated_at']) === false) {
+            $record['updated_at'] = date('Y-m-d H:i:s');
+        }
+        
+        // ✅ FIX: Ensure created_at is set if it exists in the record but is invalid
+        if (isset($record['created_at']) && (
+            empty($record['created_at']) || 
+            $record['created_at'] === '0000-00-00' || 
+            $record['created_at'] === '0000-00-00 00:00:00' ||
+            strtotime($record['created_at']) === false)) {
+            $record['created_at'] = date('Y-m-d H:i:s');
+        }
 
         if (count($record) > 0) {
             $processedRecords[] = $record;
@@ -1360,18 +1378,42 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
         }
     }
 
-    // Validate and fix UPDATED_ON field in converted data
+    // Validate and fix UPDATED_ON/updated_at field in converted data
+    $updatedAtValue = null;
+    
+    // Check for UPDATED_ON (uppercase) first
     if (isset($converted['UPDATED_ON'])) {
-        $updatedOn = $converted['UPDATED_ON'];
+        $updatedAtValue = $converted['UPDATED_ON'];
+    } elseif (isset($converted['updated_at'])) {
+        $updatedAtValue = $converted['updated_at'];
+    }
+    
+    // Validate the value
+    if ($updatedAtValue !== null) {
         if (
-            empty($updatedOn) ||
-            $updatedOn === '0000-00-00' ||
-            $updatedOn === '0000-00-00 00:00:00' ||
-            strtotime($updatedOn) === false
+            empty($updatedAtValue) ||
+            $updatedAtValue === '0000-00-00' ||
+            $updatedAtValue === '0000-00-00 00:00:00' ||
+            strtotime($updatedAtValue) === false
         ) {
-            $converted['UPDATED_ON'] = '1970-01-01 00:00:00';
-            // dump("Warning: Invalid UPDATED_ON in converted data: '$updatedOn' - Using current date: {$converted['UPDATED_ON']}");
+            $updatedAtValue = date('Y-m-d H:i:s'); // Use current timestamp for invalid dates
         }
+    } else {
+        // No UPDATED_ON found - use current timestamp
+        $updatedAtValue = date('Y-m-d H:i:s');
+    }
+    
+    // Set the appropriate field name based on direction
+    if ($direction === 'to_remote') {
+        // Remote tables use lowercase 'updated_at'
+        $converted['updated_at'] = $updatedAtValue;
+        // Remove uppercase version if it exists
+        unset($converted['UPDATED_ON']);
+    } else {
+        // UBS/local MySQL uses uppercase 'UPDATED_ON'
+        $converted['UPDATED_ON'] = $updatedAtValue;
+        // Remove lowercase version if it exists
+        unset($converted['updated_at']);
     }
     
     // ✅ FIX: Remove remote-specific fields that don't exist in UBS/local MySQL
