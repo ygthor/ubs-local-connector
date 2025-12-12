@@ -103,7 +103,6 @@ try {
                 if ($isForceSync) {
                     // Force sync: Get ALL records regardless of timestamp or NULL values
                     $countSql = "SELECT COUNT(*) as total FROM `$ubs_table`";
-                    ProgressDisplay::info("🔄 FORCE SYNC: Syncing ALL records for $ubs_table (including NULL UPDATED_ON)");
                 } else {
                     // Normal sync: Only records updated after last sync
                     $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
@@ -115,48 +114,49 @@ try {
                 $totalCountSql = "SELECT COUNT(*) as total FROM `$ubs_table`";
                 $totalCount = $db->first($totalCountSql)['total'];
                 
-                ProgressDisplay::info("📊 Found $ubsCount UBS records to process for $ubs_table (Total in table: $totalCount)");
+                // Only show if there are records to process
+                if ($ubsCount > 0) {
+                    ProgressDisplay::info("📊 $ubs_table: $ubsCount records (total: $totalCount)");
+                }
             } catch (Exception $e) {
                 ProgressDisplay::error("❌ Error checking table $ubs_table: " . $e->getMessage());
                 continue;
             }
             
-            // Always fetch remote data to check for server-side updates
-            // ✅ FORCE SYNC: For icitem and icgroup, fetch ALL remote records
-            try {
-                if ($isForceSync) {
-                    ProgressDisplay::info("🔍 Fetching ALL remote data for $ubs_table (force sync - ignoring timestamp)");
-                    $remote_data = fetchServerData($ubs_table, null); // null = get all records
-                } else {
-                    ProgressDisplay::info("🔍 Fetching remote data for $ubs_table (updated after: $last_synced_at)");
-                    $remote_data = fetchServerData($ubs_table, $last_synced_at);
-                }
-                $remoteCount = count($remote_data);
-                ProgressDisplay::info("📊 Found $remoteCount remote records to compare for $ubs_table");
-                
-                // ✅ If no remote data found with timestamp filter, but we have UBS data, 
-                // check if remote has ANY data (might be missing in local)
-                if ($remoteCount == 0 && $ubsCount > 0) {
-                    ProgressDisplay::info("🔍 No remote records with timestamp filter, checking if remote has any records at all...");
+            // ✅ OPTIMIZATION: Don't load all remote data upfront - fetch per chunk instead
+            // This saves memory and is much faster for large tables
+            $remoteCount = 0;
+            $remote_data = []; // Will be fetched per chunk if needed
+            
+            // Only check remote count if we have UBS data to compare
+            if ($ubsCount > 0) {
+                try {
                     $db_remote_check = new mysql();
                     $db_remote_check->connect_remote();
                     $remote_table_name = Converter::table_convert_remote($ubs_table);
-                    $totalRemoteSql = "SELECT COUNT(*) as total FROM $remote_table_name";
-                    $totalRemote = $db_remote_check->first($totalRemoteSql)['total'] ?? 0;
-                    ProgressDisplay::info("📊 Remote table $remote_table_name has $totalRemote total records");
+                    $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
+                    
+                    if ($isForceSync) {
+                        $countSql = "SELECT COUNT(*) as total FROM $remote_table_name";
+                    } else {
+                        $countSql = "SELECT COUNT(*) as total FROM $remote_table_name WHERE $column_updated_at > '$last_synced_at'";
+                    }
+                    $remoteCount = $db_remote_check->first($countSql)['total'] ?? 0;
                     $db_remote_check->close();
+                } catch (Exception $e) {
+                    // Ignore - will fetch per chunk anyway
                 }
-            } catch (Exception $e) {
-                ProgressDisplay::error("❌ Error fetching remote data for $ubs_table: " . $e->getMessage());
-                $remote_data = [];
-                $remoteCount = 0;
             }
             
-            // ProgressDisplay::info("Fetched $remoteCount remote records for $ubs_table");
-            // If no data on either side, skip this table
+            // ✅ OPTIMIZED: If no data on either side, skip with concise message
             if ($ubsCount == 0 && $remoteCount == 0) {
-                ProgressDisplay::info("No data to sync for $ubs_table (no UBS or remote updates), skipping...");
+                ProgressDisplay::info("⏭️  SKIP $ubs_table (no data)");
                 continue;
+            }
+            
+            // Only show detailed info if there's actual data to process
+            if ($ubsCount > 0 || $remoteCount > 0) {
+                ProgressDisplay::info("📊 $ubs_table: UBS=$ubsCount, Remote=$remoteCount");
             }
             
             // Start cache tracking with total records to process
@@ -171,70 +171,11 @@ try {
             $iterationCount = 0;
             
             
-            // ✅ Process remote-only records (records that exist in remote but not in local UBS)
-            // This ensures we sync missing records from remote to local, even if they're older than last_synced_at
-            if ($remoteCount > 0) {
-                ProgressDisplay::info("🔍 Checking for remote-only records (missing in local UBS)...");
-                
-                // Get all UBS keys that exist (to compare with remote)
-                // Only fetch keys, not full records, to save memory
-                $allUbsKeys = [];
-                $ubs_key = Converter::primaryKey($ubs_table);
-                $is_composite_key = is_array($ubs_key);
-                
-                // Build SQL to get only keys
-                if ($is_composite_key) {
-                    $keyColumns = array_map(function($k) { return "`$k`"; }, $ubs_key);
-                    $keySql = "SELECT " . implode(', ', $keyColumns) . " FROM `$ubs_table`";
-                } else {
-                    $keySql = "SELECT `$ubs_key` FROM `$ubs_table`";
-                }
-                
-                $allUbsKeysData = $db->get($keySql);
-                foreach ($allUbsKeysData as $row) {
-                    if ($is_composite_key) {
-                        $composite_keys = [];
-                        foreach ($ubs_key as $k) {
-                            $composite_keys[] = $row[$k] ?? '';
-                        }
-                        $key = implode('|', $composite_keys);
-                    } else {
-                        $key = $row[$ubs_key] ?? '';
-                    }
-                    $allUbsKeys[$key] = true;
-                }
-                unset($allUbsKeysData); // Free memory
-                
-                // Find remote records that don't exist in local UBS
-                $remote_key = Converter::primaryKey(Converter::table_convert_remote($ubs_table));
-                $remote_only_records = [];
-                foreach ($remote_data as $remote_row) {
-                    $remoteKey = $remote_row[$remote_key] ?? '';
-                    if (!isset($allUbsKeys[$remoteKey])) {
-                        // This remote record doesn't exist in local UBS - needs to be synced
-                        $remote_only_records[] = $remote_row;
-                    }
-                }
-                
-                if (!empty($remote_only_records)) {
-                    ProgressDisplay::info("📦 Found " . count($remote_only_records) . " remote-only records to sync to local UBS");
-                    $comparedData = syncEntity($ubs_table, [], $remote_only_records);
-                    $ubs_data_to_upsert = $comparedData['ubs_data'];
-                    
-                    if (!empty($ubs_data_to_upsert)) {
-                        executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert) {
-                            ProgressDisplay::info("⬇️ Syncing " . count($ubs_data_to_upsert) . " remote-only records to local UBS");
-                            batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
-                        }, true);
-                    }
-                } else {
-                    ProgressDisplay::info("✓ No remote-only records found (all remote records exist in local)");
-                }
-                unset($allUbsKeys, $remote_only_records); // Free memory
-            } elseif ($ubsCount == 0) {
+            // ✅ OPTIMIZATION: Skip remote-only processing - will be handled per chunk
+            // This avoids loading all remote data and all UBS keys upfront
+            if ($ubsCount == 0) {
                 // ✅ If no remote data found with timestamp filter, but local has no data,
                 // fetch ALL remote records to check if there are any missing in local
-                ProgressDisplay::info("🔍 No remote records with timestamp filter, checking for ALL remote records missing in local...");
                 try {
                     $db_remote_all = new mysql();
                     $db_remote_all->connect_remote();
@@ -244,8 +185,6 @@ try {
                     $db_remote_all->close();
                     
                     if (!empty($allRemoteData)) {
-                        ProgressDisplay::info("📊 Found " . count($allRemoteData) . " total remote records (ignoring timestamp filter)");
-                        
                         // Get all local UBS keys
                         $allUbsKeys = [];
                         $ubs_key = Converter::primaryKey($ubs_table);
@@ -284,13 +223,12 @@ try {
                         }
                         
                         if (!empty($missing_records)) {
-                            ProgressDisplay::info("📦 Found " . count($missing_records) . " remote records missing in local (regardless of timestamp)");
                             $comparedData = syncEntity($ubs_table, [], $missing_records);
                             $ubs_data_to_upsert = $comparedData['ubs_data'];
                             
                             if (!empty($ubs_data_to_upsert)) {
                                 executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert) {
-                                    ProgressDisplay::info("⬇️ Syncing " . count($ubs_data_to_upsert) . " missing remote records to local UBS");
+                                    ProgressDisplay::info("⬇️ $ubs_table: Syncing " . count($ubs_data_to_upsert) . " missing remote→UBS");
                                     batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
                                 }, true);
                             }
@@ -298,7 +236,7 @@ try {
                         unset($allUbsKeys, $missing_records, $allRemoteData);
                     }
                 } catch (Exception $e) {
-                    ProgressDisplay::warning("⚠️  Could not check for all remote records: " . $e->getMessage());
+                    ProgressDisplay::warning("⚠️  $ubs_table: " . $e->getMessage());
                 }
             }
             
@@ -333,65 +271,60 @@ try {
                 // For icgroup, preserve NULL values
                 $ubs_data = validateAndFixUpdatedOn($ubs_data, $ubs_table);
                 
-                // ✅ OPTIMIZATION: Only fetch remote records that match current UBS chunk keys
-                // This avoids loading all 17,941 remote records for every 500-record chunk
-                $chunk_remote_data = [];
-                if (!empty($remote_data) && count($remote_data) > 1000) {
-                    // Extract keys from current UBS chunk
-                    $ubs_key = Converter::primaryKey($ubs_table);
-                    $is_composite_key = is_array($ubs_key);
-                    $chunk_keys = [];
-                    
-                    foreach ($ubs_data as $row) {
-                        if ($is_composite_key) {
-                            $composite_keys = [];
-                            foreach ($ubs_key as $k) {
-                                $composite_keys[] = $row[$k] ?? '';
-                            }
-                            $key = implode('|', $composite_keys);
-                        } else {
-                            $key = $row[$ubs_key] ?? '';
+                // ✅ OPTIMIZATION: Fetch only remote records that match current UBS chunk keys
+                // This is MUCH faster than loading all remote data upfront
+                $ubs_key = Converter::primaryKey($ubs_table);
+                $is_composite_key = is_array($ubs_key);
+                $chunk_keys = [];
+                
+                foreach ($ubs_data as $row) {
+                    if ($is_composite_key) {
+                        $composite_keys = [];
+                        foreach ($ubs_key as $k) {
+                            $composite_keys[] = $row[$k] ?? '';
                         }
-                        if (!empty($key)) {
-                            $chunk_keys[] = $key;
-                        }
+                        $key = implode('|', $composite_keys);
+                    } else {
+                        $key = $row[$ubs_key] ?? '';
                     }
-                    
-                    // Fetch only matching remote records
-                    if (!empty($chunk_keys)) {
-                        $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, $isForceSync ? null : $last_synced_at);
-                        ProgressDisplay::info("⚡ Optimized: Fetched " . count($chunk_remote_data) . " matching remote records (from " . count($remote_data) . " total) for this chunk");
+                    if (!empty($key)) {
+                        $chunk_keys[] = $key;
                     }
-                } else {
-                    // Use all remote_data if it's small enough (< 1000 records)
-                    $chunk_remote_data = $remote_data;
                 }
                 
-                ProgressDisplay::info("Syncing " . count($ubs_data) . " UBS records with " . count($chunk_remote_data) . " remote records");
+                // Fetch only matching remote records for this chunk
+                $chunk_remote_data = [];
+                if (!empty($chunk_keys)) {
+                    $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, $isForceSync ? null : $last_synced_at);
+                }
                 
-                // Debug output removed - loop issue fixed with ORDER BY clause
-                // echo "🔍 About to call syncEntity for $ubs_table\n";
-                $comparedData = syncEntity($ubs_table, $ubs_data, $chunk_remote_data);
-
-                // dd($comparedData);
-                
-                ProgressDisplay::info("🔍 syncEntity completed for $ubs_table");
-                // echo "🔍 After syncEntity, about to process results\n";
-                
-                $remote_data_to_upsert = $comparedData['remote_data'];
-                $ubs_data_to_upsert = $comparedData['ubs_data'];
+                // ✅ FAST PATH: If no remote data, skip syncEntity (like main_init.php)
+                // This avoids expensive comparison when there's nothing to compare
+                if (empty($chunk_remote_data)) {
+                    // All UBS records need to sync to remote
+                    $remote_data_to_upsert = [];
+                    foreach ($ubs_data as $row) {
+                        $remote_data_to_upsert[] = convert(Converter::table_convert_remote($ubs_table), $row, 'to_remote');
+                    }
+                    $ubs_data_to_upsert = [];
+                } else {
+                    // Compare with remote data
+                    $comparedData = syncEntity($ubs_table, $ubs_data, $chunk_remote_data);
+                    $remote_data_to_upsert = $comparedData['remote_data'];
+                    $ubs_data_to_upsert = $comparedData['ubs_data'];
+                }
                 
                 // ✅ SAFE: Use transaction wrapper for data integrity
                 // Use batch processing for better performance
                 if (!empty($remote_data_to_upsert) || !empty($ubs_data_to_upsert)) {
                     executeSyncWithTransaction(function() use ($ubs_table, $remote_data_to_upsert, $ubs_data_to_upsert) {
                         if (!empty($remote_data_to_upsert)) {
-                            ProgressDisplay::info("Upserting " . count($remote_data_to_upsert) . " remote records");
+                            ProgressDisplay::info("⬆️ $ubs_table: " . count($remote_data_to_upsert) . " UBS→Remote");
                             batchUpsertRemote($ubs_table, $remote_data_to_upsert);
                         }
 
                         if (!empty($ubs_data_to_upsert)) {
-                            ProgressDisplay::info("Upserting " . count($ubs_data_to_upsert) . " UBS records");
+                            ProgressDisplay::info("⬇️ $ubs_table: " . count($ubs_data_to_upsert) . " Remote→UBS");
                             batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
                         }
                     }, true); // Use transactions
@@ -420,25 +353,11 @@ try {
             
             // Additional safety check: if we've processed more records than exist, break
             if ($processedRecords >= $ubsCount) {
-                ProgressDisplay::info("✅ All UBS records processed for $ubs_table");
+                // All records processed, break silently
             }
             
-            // If no UBS data but remote data exists, sync remote-only changes
-            if ($ubsCount == 0 && $remoteCount > 0) {
-                ProgressDisplay::info("No UBS data, but found $remoteCount remote records to sync to UBS");
-                
-                $comparedData = syncEntity($ubs_table, [], $remote_data);
-                
-                $ubs_data_to_upsert = $comparedData['ubs_data'];
-                
-                if (!empty($ubs_data_to_upsert)) {
-                    ProgressDisplay::info("Upserting " . count($ubs_data_to_upsert) . " remote records to UBS");
-                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
-                }
-                
-                $processedRecords = $remoteCount;
-                updateSyncCache($processedRecords, $processedRecords);
-            }
+            // ✅ OPTIMIZATION: Skip remote-only sync when UBS is empty
+            // This is handled per chunk above, no need to load all remote data here
             
             // Handle table-specific triggers
             $table_trigger_reset = ['customer','orders'];
