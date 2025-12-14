@@ -128,8 +128,11 @@ try {
             $remoteCount = 0;
             $remote_data = []; // Will be fetched per chunk if needed
             
-            // Only check remote count if we have UBS data to compare
-            if ($ubsCount > 0) {
+            // Check if this is artran table (needs special handling for orders)
+            $isArtran = ($ubs_table === 'ubs_ubsstk2015_artran');
+            
+            // Only check remote count if we have UBS data to compare, OR if it's artran (always check for orders)
+            if ($ubsCount > 0 || $isArtran) {
                 try {
                     $db_remote_check = new mysql();
                     $db_remote_check->connect_remote();
@@ -142,6 +145,16 @@ try {
                         $countSql = "SELECT COUNT(*) as total FROM $remote_table_name WHERE $column_updated_at > '$last_synced_at'";
                     }
                     $remoteCount = $db_remote_check->first($countSql)['total'] ?? 0;
+                    
+                    // For artran, also check total count if no recent updates
+                    if ($isArtran && $remoteCount == 0) {
+                        $totalRemoteSql = "SELECT COUNT(*) as total FROM $remote_table_name";
+                        $totalRemoteCount = $db_remote_check->first($totalRemoteSql)['total'] ?? 0;
+                        if ($totalRemoteCount > 0) {
+                            ProgressDisplay::info("📊 Artran: $totalRemoteCount total orders in remote (none updated recently)");
+                        }
+                    }
+                    
                     $db_remote_check->close();
                 } catch (Exception $e) {
                     // Ignore - will fetch per chunk anyway
@@ -149,9 +162,15 @@ try {
             }
             
             // ✅ OPTIMIZED: If no data on either side, skip with concise message
-            if ($ubsCount == 0 && $remoteCount == 0) {
+            // BUT: For artran (orders), always check remote even if local is empty
+            if ($ubsCount == 0 && $remoteCount == 0 && !$isArtran) {
                 ProgressDisplay::info("⏭️  SKIP $ubs_table (no data)");
                 continue;
+            }
+            
+            // Special handling for artran: Always check remote for missing orders
+            if ($isArtran && $ubsCount == 0) {
+                ProgressDisplay::info("🔍 Artran: No local updates, checking remote for missing orders...");
             }
             
             // Only show detailed info if there's actual data to process

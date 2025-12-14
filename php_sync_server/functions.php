@@ -1008,48 +1008,95 @@ function recalculateArtranTotals($refNos)
                 $grand = $net + $totalTax;
                 $debitamt = $grand;
 
-                // Update artran record
-                $artranEditor = new \XBase\TableEditor($artranPath, [
-                    'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
-                ]);
-
-                $found = false;
-                $artranEditor->moveTo(0); // Reset to beginning
-
-                while ($row = $artranEditor->nextRecord()) {
-                    if ($row->isDeleted()) continue;
-
-                    $rowRefNo = trim($row->get('REFNO') ?? '');
-
-                    // Case-insensitive comparison and handle whitespace
-                    if (strtoupper($rowRefNo) === strtoupper($refNoTrimmed)) {
-                        // Update totals
-                        try {
-                            $row->set('GROSS_BIL', $grossBil);
-                            $row->set('NET_BIL', $netBil);
-                            $row->set('GRAND_BIL', $grandBil);
-                            $row->set('DEBIT_BIL', $debitBil);
-                            $row->set('INVGROSS', $invgross);
-                            $row->set('NET', $net);
-                            $row->set('GRAND', $grand);
-                            $row->set('DEBITAMT', $debitamt);
-
-                            $artranEditor->writeRecord();
-
-                            // Always save since we're using CLONE mode
-                            $artranEditor->save();
-
-                            $found = true;
-                            ProgressDisplay::info("📝 Updated artran DBF record for REFNO: $refNoTrimmed");
-                            break;
-                        } catch (\Throwable $e) {
-                            ProgressDisplay::error("❌ Error setting artran fields for REFNO $refNoTrimmed: " . $e->getMessage());
-                            throw $e;
-                        }
-                    }
+                // ✅ SAFETY: Add safety checks before writing to artran DBF
+                // Check if UBS is running
+                if (isUbsRunning()) {
+                    throw new Exception("❌ UBS software is currently running! Cannot update artran DBF.");
                 }
 
-                $artranEditor->close();
+                // Check if file is locked
+                if (isDbfFileLocked($artranPath)) {
+                    throw new Exception("❌ Artran DBF file is currently locked or in use.");
+                }
+
+                // Create backup before writing
+                $artranBackupPath = backupDbfFile($artranPath);
+                if ($artranBackupPath === false) {
+                    ProgressDisplay::warning("⚠️  Could not create backup for artran, but continuing anyway...");
+                }
+
+                // Acquire file lock
+                $artranLockFp = acquireDbfLock($artranPath);
+                if ($artranLockFp === false) {
+                    throw new Exception("❌ Cannot acquire exclusive lock on artran DBF file.");
+                }
+
+                try {
+                    // Update artran record
+                    $artranEditor = new \XBase\TableEditor($artranPath, [
+                        'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
+                    ]);
+
+                    $found = false;
+                    $artranEditor->moveTo(0); // Reset to beginning
+
+                    while ($row = $artranEditor->nextRecord()) {
+                        if ($row->isDeleted()) continue;
+
+                        $rowRefNo = trim($row->get('REFNO') ?? '');
+
+                        // Case-insensitive comparison and handle whitespace
+                        if (strtoupper($rowRefNo) === strtoupper($refNoTrimmed)) {
+                            // Update totals
+                            try {
+                                $row->set('GROSS_BIL', $grossBil);
+                                $row->set('NET_BIL', $netBil);
+                                $row->set('GRAND_BIL', $grandBil);
+                                $row->set('DEBIT_BIL', $debitBil);
+                                $row->set('INVGROSS', $invgross);
+                                $row->set('NET', $net);
+                                $row->set('GRAND', $grand);
+                                $row->set('DEBITAMT', $debitamt);
+
+                                $artranEditor->writeRecord();
+
+                                // Always save since we're using CLONE mode
+                                $artranEditor->save();
+
+                                // ✅ Validate file after save
+                                if (!validateDbfFile($artranPath)) {
+                                    throw new Exception("DBF file validation failed after artran update. File may be corrupted.");
+                                }
+
+                                $found = true;
+                                ProgressDisplay::info("📝 Updated artran DBF record for REFNO: $refNoTrimmed");
+                                break;
+                            } catch (\Throwable $e) {
+                                ProgressDisplay::error("❌ Error setting artran fields for REFNO $refNoTrimmed: " . $e->getMessage());
+                                throw $e;
+                            }
+                        }
+                    }
+
+                    $artranEditor->close();
+                } catch (\Throwable $e) {
+                    // ✅ Restore from backup if error occurred
+                    if ($artranBackupPath !== null && file_exists($artranBackupPath)) {
+                        ProgressDisplay::warning("⚠️  Error occurred during artran DBF write. Attempting to restore from backup...");
+                        try {
+                            copy($artranBackupPath, $artranPath);
+                            ProgressDisplay::info("✅ Artran DBF file restored from backup");
+                        } catch (\Throwable $restoreError) {
+                            ProgressDisplay::error("❌ Failed to restore artran DBF file from backup: " . $restoreError->getMessage());
+                        }
+                    }
+                    throw $e;
+                } finally {
+                    // ✅ Always release lock
+                    if (isset($artranLockFp) && $artranLockFp !== null) {
+                        releaseDbfLock($artranLockFp);
+                    }
+                }
 
                 if ($found) {
                     ProgressDisplay::info("✅ Updated artran DBF for REFNO: $refNo (GROSS_BIL: $grossBil, GRAND_BIL: $grandBil)");
