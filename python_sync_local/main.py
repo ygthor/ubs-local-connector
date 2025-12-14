@@ -10,12 +10,12 @@ import atexit
 def main():
     # Check if PHP sync is running
     if is_sync_running('php'):
-        print("❌ PHP sync is currently running. Please wait for it to complete.")
+        print("❌ PHP sync is currently running. Please wait for it to complete.", flush=True)
         sys.exit(1)
     
     # Acquire Python sync lock
     if not acquire_sync_lock('python'):
-        print("❌ Python sync is already running or lock file exists. Please check and remove lock file if needed.")
+        print("❌ Python sync is already running or lock file exists. Please check and remove lock file if needed.", flush=True)
         sys.exit(1)
     
     # Register cleanup function to release lock on exit
@@ -27,7 +27,7 @@ def main():
         # test_server_response()
         sync_all()
     except Exception as e:
-        print(f"❌ Sync failed: {e}")
+        print(f"❌ Sync failed: {e}", flush=True)
         release_sync_lock('python')
         sys.exit(1)
     finally:
@@ -47,7 +47,7 @@ def main():
 
 def sync_all():
     start_time = time.time()
-    print("🚀 Starting FAST DBF to MySQL sync...")
+    print("🚀 Starting FAST DBF to MySQL sync...", flush=True)
     
     grouped_dbfs = {
         "UBSACC2015": [
@@ -79,19 +79,27 @@ def sync_all():
             
             # Check if file exists before processing
             if not os.path.exists(full_path):
-                print(f"⚠️  File {full_path} not found, skipping...")
+                print(f"⚠️  File {full_path} not found, skipping...", flush=True)
                 continue
                 
             try:
                 file_start = time.time()
-                print(f"📁 [{processed_files+1}/{total_files}] Processing {file_name}...")
+                print(f"📁 [{processed_files+1}/{total_files}] Processing {file_name}...", flush=True)
                 
-                data = read_dbf(full_path)
+                # Define progress callback for this file
+                def progress_callback(records_read, status_message):
+                    print(status_message, flush=True)
+                
+                print(f"🔍 Reading DBF file: {file_name}...", flush=True)
+                data = read_dbf(full_path, progress_callback=progress_callback)
                 
                 # Check if we got valid data
                 if not data or not data.get('structure') or not data.get('rows'):
-                    print(f"⚠️  No data in {file_name}, skipping...")
+                    print(f"⚠️  No data in {file_name}, skipping...", flush=True)
                     continue
+                
+                original_record_count = len(data['rows'])
+                print(f"📊 Read {original_record_count:,} records from {file_name}", flush=True)
                 
                 # Filter artran: Apply different rules for DO and INV types
                 # - DO with DATE <= 2025-12-12: Keep only latest per agent_no
@@ -99,6 +107,7 @@ def sync_all():
                 # - INV with DATE <= 2025-12-12: Skip ALL
                 # - INV with DATE > 2025-12-12: Keep ALL (future dates allowed)
                 if dbf_name == 'artran':
+                    print(f"🔍 Filtering artran records...", flush=True)
                     cutoff_date_str = '20251212'  # YYYYMMDD format (DBF date format)
                     original_count = len(data['rows'])
                     
@@ -176,14 +185,15 @@ def sync_all():
                         do_kept = len(agent_latest)
                         do_skipped = len(do_records) - do_kept
                         if do_skipped > 0:
-                            print(f"⏭️  DO (date <= 2025-12-12): Kept {do_kept} latest record(s) per agent, skipped {do_skipped} older DO(s)")
+                            print(f"⏭️  DO (date <= 2025-12-12): Kept {do_kept} latest record(s) per agent, skipped {do_skipped} older DO(s)", flush=True)
                     
                     data['rows'] = other_records
                     filtered_count = len(other_records)
                     skipped_count = original_count - filtered_count
                     
                     if skipped_count > 0:
-                        print(f"⏭️  Filtered {skipped_count} record(s) ({filtered_count} remaining)")
+                        print(f"⏭️  Filtered {skipped_count:,} record(s) ({filtered_count:,} remaining)", flush=True)
+                    print(f"✅ Filtering complete: {filtered_count:,} records to sync", flush=True)
                 
                 # Filter ictran: Keep all records
                 # Orphaned items (where parent order was deleted) will be cleaned up by database cleanup script
@@ -194,23 +204,27 @@ def sync_all():
                     # DELETE oi FROM order_items oi LEFT JOIN orders o ON oi.reference_no = o.reference_no 
                     # WHERE o.reference_no IS NULL
                     pass
-                    
+                
+                record_count_to_sync = len(data['rows'])
+                print(f"💾 Syncing {record_count_to_sync:,} records to database...", flush=True)
                 sync_to_database(file_name, data, directory_name)
                 
                 file_time = time.time() - file_start
-                print(f"✅ {file_name} completed in {file_time:.2f}s ({len(data['rows'])} records)")
+                print(f"✅ {file_name} completed in {file_time:.2f}s ({record_count_to_sync:,} records)", flush=True)
                 
             except Exception as e:
-                print(f"❌ Error processing {file_name}: {e}")
+                print(f"❌ Error processing {file_name}: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
                 continue
             
             processed_files += 1
     
     total_time = time.time() - start_time
-    print(f"\n🎉 SYNC COMPLETED!")
-    print(f"⏱️  Total time: {total_time:.2f} seconds")
-    print(f"📊 Files processed: {processed_files}/{total_files}")
-    print(f"⚡ Average per file: {total_time/processed_files:.2f}s" if processed_files > 0 else "")
+    print(f"\n🎉 SYNC COMPLETED!", flush=True)
+    print(f"⏱️  Total time: {total_time:.2f} seconds", flush=True)
+    print(f"📊 Files processed: {processed_files}/{total_files}", flush=True)
+    print(f"⚡ Average per file: {total_time/processed_files:.2f}s" if processed_files > 0 else "", flush=True)
 
 
 def single_sync():

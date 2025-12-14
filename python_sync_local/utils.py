@@ -299,16 +299,33 @@ def read_dbf_original(dbf_file_path):
                 "rows": []
             }
 
-def read_dbf(dbf_file_path):
+def read_dbf(dbf_file_path, progress_callback=None):
     """
     Read DBF file using the dbf library for proper timestamp handling - ENHANCED VERSION
+    with progress reporting support
+    
+    Args:
+        dbf_file_path: Path to the DBF file
+        progress_callback: Optional callback function(records_read, status_message) called periodically
     """
+    import sys
+    import time
+    
     try:
+        # Get file size for progress estimation
+        file_size = os.path.getsize(dbf_file_path) if os.path.exists(dbf_file_path) else 0
+        file_size_mb = file_size / (1024 * 1024) if file_size > 0 else 0
+        
+        if file_size_mb > 0:
+            print(f"📊 File size: {file_size_mb:.2f} MB", flush=True)
+        print(f"🔍 Opening DBF file...", flush=True)
+        
         # Use dbf library for proper timestamp field handling
         table = dbf.Table(dbf_file_path)
         table.open(mode=dbf.READ_ONLY)
         
         # Get field structure
+        print(f"📋 Reading field structure...", flush=True)
         fields = []
         for field in table.field_names:
             field_info = table.field_info(field)
@@ -321,10 +338,20 @@ def read_dbf(dbf_file_path):
                 "decs": field_info.decimal
             })
         
-        # Read records - ORIGINAL WORKING METHOD
+        print(f"✅ Found {len(fields)} fields, starting to read records...", flush=True)
+        
+        # Read records - ORIGINAL WORKING METHOD with progress reporting
         data = []
         error_count = 0
         max_errors = 100  # Limit consecutive errors to prevent infinite loops
+        
+        # Progress reporting variables
+        records_read = 0
+        last_progress_time = time.time()
+        progress_interval = 2.0  # Report progress every 2 seconds
+        progress_record_interval = 1000  # Report progress every 1000 records
+        
+        start_time = time.time()
         
         for record in table:
             # Check if record is deleted (handle both methods)
@@ -383,13 +410,40 @@ def read_dbf(dbf_file_path):
                 serialized_record = serialize_record(record_data)
                 data.append(serialized_record)
                 error_count = 0  # Reset error count on successful record
+                
+                records_read += 1
+                
+                # Progress reporting: every N records or every few seconds
+                current_time = time.time()
+                should_report = (
+                    records_read % progress_record_interval == 0 or
+                    (current_time - last_progress_time) >= progress_interval
+                )
+                
+                if should_report:
+                    elapsed = current_time - start_time
+                    rate = records_read / elapsed if elapsed > 0 else 0
+                    status = f"📥 Reading records: {records_read:,} read ({rate:.0f} records/sec)"
+                    
+                    if progress_callback:
+                        progress_callback(records_read, status)
+                    else:
+                        print(status, flush=True)
+                    
+                    last_progress_time = current_time
+                    
             except Exception as serialize_error:
                 error_count += 1
                 if error_count > max_errors:
-                    print(f"Too many consecutive errors ({error_count}), stopping processing to prevent infinite loop")
+                    print(f"Too many consecutive errors ({error_count}), stopping processing to prevent infinite loop", flush=True)
                     break
-                print(f"Warning: Could not serialize record: {serialize_error}")
+                print(f"Warning: Could not serialize record: {serialize_error}", flush=True)
                 continue
+        
+        # Final progress report
+        elapsed_total = time.time() - start_time
+        rate_total = records_read / elapsed_total if elapsed_total > 0 else 0
+        print(f"✅ Read {records_read:,} records in {elapsed_total:.2f}s ({rate_total:.0f} records/sec)", flush=True)
         
         table.close()
         

@@ -8,6 +8,7 @@ import re
 import time
 import shutil
 from datetime import datetime
+import platform
 
 class SyncGUI:
     def __init__(self, root):
@@ -297,7 +298,7 @@ class SyncGUI:
     
     def parse_python_progress(self, line):
         """Parse Python sync output for progress"""
-        # Parse [X/Y] format
+        # Parse [X/Y] format for file processing
         match = re.search(r'\[(\d+)/(\d+)\]', line)
         if match:
             file_num = int(match.group(1))
@@ -306,6 +307,29 @@ class SyncGUI:
             # Calculate: 10% (start) + (file_num / total_files) * 40% = 10-50%
             percent = 10 + round((file_num / total_files) * 40)
             return percent, f"Phase 1: Python Sync ({file_num}/{total_files} files)"
+        
+        # Parse "Reading records: X read" for DBF reading progress
+        match = re.search(r'Reading records: ([\d,]+) read', line)
+        if match:
+            records_read = int(match.group(1).replace(',', ''))
+            # Keep current file progress, just update detail
+            return self.current_percent, None
+        
+        # Parse "Read X records" completion message
+        match = re.search(r'Read ([\d,]+) records in', line)
+        if match:
+            # File reading complete, maintain progress
+            return self.current_percent, None
+        
+        # Parse "Syncing X records to database" message
+        if 'Syncing' in line and 'records to database' in line:
+            return self.current_percent, None
+        
+        # Parse "completed in Xs" for file completion
+        match = re.search(r'completed in ([\d.]+)s', line)
+        if match:
+            # File sync complete, maintain progress
+            return self.current_percent, None
         
         # Check for completion
         if 'SYNC COMPLETED' in line:
@@ -387,16 +411,25 @@ class SyncGUI:
         env['PYTHONIOENCODING'] = 'utf-8'
         env['PYTHONUTF8'] = '1'
         
+        # Prevent console window from flashing on Windows
+        popen_kwargs = {
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.PIPE,
+            'text': True,
+            'encoding': 'utf-8',
+            'errors': 'replace',
+            'bufsize': 1,
+            'cwd': os.path.dirname(self.python_script),
+            'env': env
+        }
+        
+        if platform.system() == 'Windows':
+            # CREATE_NO_WINDOW flag prevents new console window from appearing
+            popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        
         process = subprocess.Popen(
             [self.python_exe, self.python_script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            bufsize=1,
-            cwd=os.path.dirname(self.python_script),
-            env=env
+            **popen_kwargs
         )
         
         # Real-time output reading with progress parsing
@@ -421,17 +454,25 @@ class SyncGUI:
                 else:
                     self.update_progress(percent, "Python Sync: Processing files...", line)
             else:
-                # Time-based fallback if no progress detected
+                # Show all lines in log for better visibility
+                # Check if it's a progress-related message (don't show verbose debug info)
+                is_progress_line = any(keyword in line for keyword in [
+                    'Reading', 'Read', 'records', 'Processing', 'Syncing', 
+                    'completed', 'Filtering', 'File size', 'Opening', 'Found'
+                ])
+                
+                if is_progress_line or len(line) < 100:  # Show progress lines or short messages
+                    self.update_progress(current_percent, "Python Sync: Processing files...", line)
+                # Time-based fallback if no progress detected for a while
                 elapsed = time.time() - start_time
-                if current_percent < 45 and elapsed > 5:
-                    estimated = 10 + min(35, round(elapsed / 3))
+                if current_percent < 45 and elapsed > 10 and not is_progress_line:
+                    # Only use time-based estimation if we haven't seen progress in 10+ seconds
+                    estimated = 10 + min(35, round(elapsed / 5))
                     if estimated > current_percent:
                         current_percent = estimated
                         self.update_progress(current_percent, 
                                            f"Python Sync: Running... ({int(elapsed)} seconds)", 
                                            "", "Phase 1: Python Sync")
-                else:
-                    self.update_progress(current_percent, "Python Sync: Processing files...", line)
         
         process.wait()
         
@@ -492,16 +533,25 @@ class SyncGUI:
             php_args.append('--resync-date')
             php_args.append(self.resync_date)
         
+        # Prevent console window from flashing on Windows
+        popen_kwargs = {
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.PIPE,
+            'text': True,
+            'encoding': 'utf-8',
+            'errors': 'replace',
+            'bufsize': 1,
+            'cwd': os.path.dirname(self.php_script),
+            'env': env
+        }
+        
+        if platform.system() == 'Windows':
+            # CREATE_NO_WINDOW flag prevents new console window from appearing
+            popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        
         process = subprocess.Popen(
             php_args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            bufsize=1,
-            cwd=os.path.dirname(self.php_script),
-            env=env
+            **popen_kwargs
         )
         
         # Real-time output reading with progress parsing

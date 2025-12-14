@@ -36,7 +36,7 @@ def sync_to_database(filename, data, directory):
         
         # Use ultra-fast method for large datasets
         if db_type == "mysql" and record_count > 10000:
-            print(f"🚀 Large dataset detected ({record_count:,} records) - using ultra-fast import")
+            print(f"🚀 Large dataset detected ({record_count:,} records) - using ultra-fast import", flush=True)
             from ultra_fast_import import ultra_fast_mysql_import
             ultra_fast_mysql_import(table_name, structures, rows)
         elif db_type == "mysql":
@@ -50,17 +50,17 @@ def sync_to_database(filename, data, directory):
         sync_time = time.time() - sync_start
         if record_count > 0:
             records_per_second = record_count / sync_time
-            print(f"📊 Performance: {records_per_second:.0f} records/sec ({sync_time:.2f}s for {record_count} records)")
+            print(f"📊 Performance: {records_per_second:.0f} records/sec ({sync_time:.2f}s for {record_count:,} records)", flush=True)
             
     except mysql.connector.Error as e:
-        print(f"❌ MySQL Error syncing data: {e}")
-        print(f"   Error Code: {e.errno}")
-        print(f"   SQL State: {e.sqlstate}")
+        print(f"❌ MySQL Error syncing data: {e}", flush=True)
+        print(f"   Error Code: {e.errno}", flush=True)
+        print(f"   SQL State: {e.sqlstate}", flush=True)
         import traceback
         traceback.print_exc()
         raise
     except Exception as e:
-        print(f"❌ Error syncing data: {e}")
+        print(f"❌ Error syncing data: {e}", flush=True)
         import traceback
         traceback.print_exc()
         raise
@@ -82,7 +82,7 @@ def sync_to_mysql(table_name, structures, rows):
             db_password = os.getenv("DB_PASSWORD", "")
             db_name = os.getenv("DB_NAME", "your_database")
             
-            print(f"🔌 Connecting to MySQL: {db_name} @ {db_host} (user: {db_user})")
+            print(f"🔌 Connecting to MySQL: {db_name} @ {db_host} (user: {db_user})", flush=True)
             
             # Optimize connection settings for bulk operations
             connection = mysql.connector.connect(
@@ -97,7 +97,7 @@ def sync_to_mysql(table_name, structures, rows):
                 connection_timeout=60
             )
             
-            print(f"✅ MySQL connection established")
+            print(f"✅ MySQL connection established", flush=True)
             
             cursor = connection.cursor(buffered=True)
 
@@ -127,7 +127,7 @@ def sync_to_mysql(table_name, structures, rows):
                     total_rows = len(rows)
                     processed_rows = 0
                     
-                    print(f"📊 Processing {total_rows:,} records in chunks of {chunk_size:,}...")
+                    print(f"📊 Processing {total_rows:,} records in chunks of {chunk_size:,}...", flush=True)
                     
                     for i in range(0, total_rows, chunk_size):
                         chunk_rows = rows[i:i + chunk_size]
@@ -152,7 +152,7 @@ def sync_to_mysql(table_name, structures, rows):
                             
                             # Progress feedback
                             progress = (processed_rows / total_rows) * 100
-                            print(f"📈 Progress: {processed_rows:,}/{total_rows:,} ({progress:.1f}%)")
+                            print(f"📈 Progress: {processed_rows:,}/{total_rows:,} ({progress:.1f}%)", flush=True)
                             
                         except mysql.connector.Error as e:
                             if "packet" in str(e).lower() or "1153" in str(e):
@@ -169,11 +169,12 @@ def sync_to_mysql(table_name, structures, rows):
                                 cursor.executemany(insert_sql, batch_data)
                                 connection.commit()
                                 processed_rows += len(chunk_rows)
-                                print(f"📈 Progress: {processed_rows:,}/{total_rows:,} ({progress:.1f}%) - Retried with smaller chunks")
+                                progress = (processed_rows / total_rows) * 100
+                                print(f"📈 Progress: {processed_rows:,}/{total_rows:,} ({progress:.1f}%) - Retried with smaller chunks", flush=True)
                             else:
                                 raise e
                     
-                    print(f"✅ Successfully processed {processed_rows:,} records")
+                    print(f"✅ Successfully processed {processed_rows:,} records", flush=True)
                 
             finally:
                 cursor.close()
@@ -184,21 +185,21 @@ def sync_to_mysql(table_name, structures, rows):
             
         except mysql.connector.Error as e:
             retry_count += 1
-            print(f"❌ MySQL Error (attempt {retry_count}/{max_retries}): {e}")
-            print(f"   Error Code: {e.errno}")
-            print(f"   SQL State: {e.sqlstate}")
+            print(f"❌ MySQL Error (attempt {retry_count}/{max_retries}): {e}", flush=True)
+            print(f"   Error Code: {e.errno}", flush=True)
+            print(f"   SQL State: {e.sqlstate}", flush=True)
             
             if "Lost connection" in str(e) and retry_count < max_retries:
-                print(f"⚠️  Connection lost, retrying ({retry_count}/{max_retries})...")
+                print(f"⚠️  Connection lost, retrying ({retry_count}/{max_retries})...", flush=True)
                 time.sleep(2)  # Wait before retry
                 continue
             elif retry_count >= max_retries:
-                print(f"❌ Max retries reached. Connection failed.")
+                print(f"❌ Max retries reached. Connection failed.", flush=True)
                 raise e
             else:
                 raise e
         except Exception as e:
-            print(f"❌ Unexpected error: {e}")
+            print(f"❌ Unexpected error: {e}", flush=True)
             import traceback
             traceback.print_exc()
             raise e
@@ -455,10 +456,10 @@ def create_sync_logs_table():
 
         cursor.execute(create_table_sql)
         connection.commit()
-        print("Table 'sync_logs' created or already exists.")
+        print("Table 'sync_logs' created or already exists.", flush=True)
 
     except Error as e:
-        print(f"Error creating table: {e}")
+        print(f"Error creating table: {e}", flush=True)
     finally:
         if connection.is_connected():
             cursor.close()
