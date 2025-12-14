@@ -92,6 +92,48 @@ def sync_all():
                 if not data or not data.get('structure') or not data.get('rows'):
                     print(f"⚠️  No data in {file_name}, skipping...")
                     continue
+                
+                # Filter artran and ictran: Skip records with DATE <= 2025-12-12
+                if dbf_name in ['artran', 'ictran']:
+                    cutoff_date_str = '20251212'  # YYYYMMDD format (DBF date format)
+                    original_count = len(data['rows'])
+                    
+                    # Filter rows based on DATE field
+                    filtered_rows = []
+                    for row in data['rows']:
+                        date_value = row.get('DATE')
+                        should_skip = False
+                        
+                        if date_value:
+                            try:
+                                # DBF DATE fields are typically in YYYYMMDD string format
+                                date_str = str(date_value).strip()
+                                
+                                # Handle YYYYMMDD format (8 digits)
+                                if len(date_str) >= 8 and date_str[:8].isdigit():
+                                    # Compare as string (YYYYMMDD format allows string comparison)
+                                    if date_str[:8] <= cutoff_date_str:
+                                        should_skip = True
+                                # Handle YYYY-MM-DD format
+                                elif '-' in date_str and len(date_str) >= 10:
+                                    date_parts = date_str[:10].split('-')
+                                    if len(date_parts) == 3:
+                                        date_comp = ''.join(date_parts)
+                                        if date_comp.isdigit() and date_comp <= cutoff_date_str:
+                                            should_skip = True
+                            except Exception:
+                                # If date parsing fails, include the record (safer)
+                                pass
+                        
+                        if not should_skip:
+                            filtered_rows.append(row)
+                    
+                    data['rows'] = filtered_rows
+                    filtered_count = len(filtered_rows)
+                    skipped_count = original_count - filtered_count
+                    
+                    if skipped_count > 0:
+                        print(f"⏭️  Skipped {skipped_count} record(s) with DATE <= 2025-12-12 ({filtered_count} remaining)")
                     
                 sync_to_database(file_name, data, directory_name)
                 
