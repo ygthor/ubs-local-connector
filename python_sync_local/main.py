@@ -93,47 +93,107 @@ def sync_all():
                     print(f"⚠️  No data in {file_name}, skipping...")
                     continue
                 
-                # Filter artran and ictran: Skip records with DATE <= 2025-12-12
-                if dbf_name in ['artran', 'ictran']:
+                # Filter artran: Apply different rules for DO and INV types
+                # - DO with DATE <= 2025-12-12: Keep only latest per agent_no
+                # - DO with DATE > 2025-12-12: Keep ALL (future dates allowed)
+                # - INV with DATE <= 2025-12-12: Skip ALL
+                # - INV with DATE > 2025-12-12: Keep ALL (future dates allowed)
+                if dbf_name == 'artran':
                     cutoff_date_str = '20251212'  # YYYYMMDD format (DBF date format)
                     original_count = len(data['rows'])
                     
-                    # Filter rows based on DATE field
-                    filtered_rows = []
+                    # Separate DO and INV records
+                    do_records = []  # DO records with date <= cutoff (will filter to latest per agent)
+                    other_records = []  # All other records: DO/INV after cutoff, other types, latest DO per agent
+                    
                     for row in data['rows']:
                         date_value = row.get('DATE')
-                        should_skip = False
+                        type_value = str(row.get('TYPE', '')).strip().upper()
+                        agent_no = str(row.get('AGENNO', '')).strip()
+                        refno = str(row.get('REFNO', '')).strip()
                         
+                        # Parse date
+                        date_str = None
                         if date_value:
                             try:
-                                # DBF DATE fields are typically in YYYYMMDD string format
                                 date_str = str(date_value).strip()
-                                
                                 # Handle YYYYMMDD format (8 digits)
                                 if len(date_str) >= 8 and date_str[:8].isdigit():
-                                    # Compare as string (YYYYMMDD format allows string comparison)
-                                    if date_str[:8] <= cutoff_date_str:
-                                        should_skip = True
+                                    date_str = date_str[:8]
                                 # Handle YYYY-MM-DD format
                                 elif '-' in date_str and len(date_str) >= 10:
                                     date_parts = date_str[:10].split('-')
                                     if len(date_parts) == 3:
-                                        date_comp = ''.join(date_parts)
-                                        if date_comp.isdigit() and date_comp <= cutoff_date_str:
-                                            should_skip = True
+                                        date_str = ''.join(date_parts)
                             except Exception:
-                                # If date parsing fails, include the record (safer)
                                 pass
                         
-                        if not should_skip:
-                            filtered_rows.append(row)
+                        # Check if date is <= cutoff
+                        is_old_date = date_str and date_str <= cutoff_date_str
+                        
+                        if type_value == 'DO' and is_old_date:
+                            # DO with date <= 2025-12-12: keep for filtering to latest per agent
+                            do_records.append({
+                                'row': row,
+                                'date_str': date_str,
+                                'agent_no': agent_no,
+                                'refno': refno
+                            })
+                        elif type_value == 'INV' and is_old_date:
+                            # INV with date <= 2025-12-12: skip all
+                            continue
+                        else:
+                            # Keep all: DO/INV with date > 2025-12-12, other types, or records without date
+                            other_records.append(row)
                     
-                    data['rows'] = filtered_rows
-                    filtered_count = len(filtered_rows)
+                    # For DO records with date <= 2025-12-12: Keep only latest per agent_no
+                    # (DO records with date > 2025-12-12 are already in other_records and will be kept)
+                    if do_records:
+                        # Group by agent_no and find latest (by date DESC, then refno DESC)
+                        from collections import defaultdict
+                        agent_latest = defaultdict(lambda: {'date': '', 'refno': '', 'row': None})
+                        
+                        for do_rec in do_records:
+                            agent = do_rec['agent_no']
+                            date = do_rec['date_str'] or ''
+                            refno = do_rec['refno']
+                            
+                            # Compare: latest date, then latest refno (both descending)
+                            current = agent_latest[agent]
+                            if (date > current['date'] or 
+                                (date == current['date'] and refno > current['refno'])):
+                                agent_latest[agent] = {
+                                    'date': date,
+                                    'refno': refno,
+                                    'row': do_rec['row']
+                                }
+                        
+                        # Add latest DO records per agent (only for dates <= 2025-12-12)
+                        for agent, latest in agent_latest.items():
+                            if latest['row']:
+                                other_records.append(latest['row'])
+                        
+                        do_kept = len(agent_latest)
+                        do_skipped = len(do_records) - do_kept
+                        if do_skipped > 0:
+                            print(f"⏭️  DO (date <= 2025-12-12): Kept {do_kept} latest record(s) per agent, skipped {do_skipped} older DO(s)")
+                    
+                    data['rows'] = other_records
+                    filtered_count = len(other_records)
                     skipped_count = original_count - filtered_count
                     
                     if skipped_count > 0:
-                        print(f"⏭️  Skipped {skipped_count} record(s) with DATE <= 2025-12-12 ({filtered_count} remaining)")
+                        print(f"⏭️  Filtered {skipped_count} record(s) ({filtered_count} remaining)")
+                
+                # Filter ictran: Keep all records
+                # Orphaned items (where parent order was deleted) will be cleaned up by database cleanup script
+                elif dbf_name == 'ictran':
+                    # Note: ictran items are linked to artran via REFNO
+                    # Since we filter artran above, some ictran items may become orphaned
+                    # These will be cleaned up by the database cleanup script that deletes:
+                    # DELETE oi FROM order_items oi LEFT JOIN orders o ON oi.reference_no = o.reference_no 
+                    # WHERE o.reference_no IS NULL
+                    pass
                     
                 sync_to_database(file_name, data, directory_name)
                 
