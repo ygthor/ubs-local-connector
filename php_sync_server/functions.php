@@ -339,8 +339,11 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
     $totalRecords = count($records);
     $processed = 0;
 
-    // Track REFNOs for artran recalculation (only for ictran table)
-    $refNosToRecalculate = [];
+        // Track REFNOs for artran recalculation (only for ictran table)
+        // Skip recalculation for TYPE='DO' (Delivery Order - inventory only, no need for GROSS_BIL/GRAND_BIL)
+        $refNosToRecalculate = [];
+        $refNosToSkip = []; // REFNOs with TYPE='DO' that should skip recalculation
+        $artranTypeCache = []; // Cache for artran TYPE lookups to avoid repeated file reads
 
     // ✅ Initialize lock variable for cleanup
     $lockFp = null;
@@ -481,10 +484,26 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         $key = getRecordKey($record, $keyField);
 
         // Track REFNO for artran recalculation (only for ictran table)
+        // Skip recalculation for TYPE='DO' (Delivery Order - inventory only)
         if ($table === 'ubs_ubsstk2015_ictran' && isset($record['REFNO'])) {
             $refNo = trim($record['REFNO']);
-            if ($refNo && !in_array($refNo, $refNosToRecalculate)) {
-                $refNosToRecalculate[] = $refNo;
+            if ($refNo) {
+                // Check cached TYPE first, then lookup if needed
+                if (!isset($artranTypeCache[$refNo])) {
+                    $artranTypeCache[$refNo] = getArtranTypeByRefNo($refNo, $directory);
+                }
+                $artranType = $artranTypeCache[$refNo];
+                
+                if ($artranType === 'DO') {
+                    if (!in_array($refNo, $refNosToSkip)) {
+                        $refNosToSkip[] = $refNo;
+                    }
+                } else {
+                    // Only recalculate for non-DO types
+                    if (!in_array($refNo, $refNosToRecalculate)) {
+                        $refNosToRecalculate[] = $refNo;
+                    }
+                }
             }
         }
 
@@ -938,8 +957,13 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         ProgressDisplay::info("Completed batch upsert for UBS $table_name");
 
         // ✅ Recalculate artran totals when ictran records are inserted/updated
+        // Skip recalculation for TYPE='DO' (Delivery Order - inventory only, no need for GROSS_BIL/GRAND_BIL)
         if ($table === 'ubs_ubsstk2015_ictran' && !empty($refNosToRecalculate)) {
             recalculateArtranTotals($refNosToRecalculate);
+        }
+        
+        if (!empty($refNosToSkip)) {
+            ProgressDisplay::info("⏭️  Skipped GROSS_BIL/GRAND_BIL recalculation for " . count($refNosToSkip) . " DO type invoice(s)");
         }
 
     } catch (\Throwable $e) {
@@ -960,6 +984,34 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         if ($lockFp !== null) {
             releaseDbfLock($lockFp);
         }
+    }
+}
+
+/**
+ * Get TYPE from artran record by REFNO
+ * Returns TYPE value or null if not found
+ */
+function getArtranTypeByRefNo($refNo, $directory)
+{
+    try {
+        $artranPath = "C:/$directory/" . ENV::DBF_SUBPATH . "/artran.dbf";
+        if (!file_exists($artranPath)) {
+            return null;
+        }
+        
+        $reader = new \XBase\TableReader($artranPath);
+        while ($row = $reader->nextRecord()) {
+            if (isset($row['REFNO']) && trim($row['REFNO']) === $refNo) {
+                $type = isset($row['TYPE']) ? trim($row['TYPE']) : null;
+                $reader->close();
+                return $type;
+            }
+        }
+        $reader->close();
+        return null;
+    } catch (\Throwable $e) {
+        // If we can't read artran, assume we should recalculate (safer)
+        return null;
     }
 }
 
