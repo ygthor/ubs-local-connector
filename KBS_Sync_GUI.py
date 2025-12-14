@@ -103,10 +103,13 @@ class SyncGUI:
     
     def find_php(self):
         """Auto-detect PHP executable"""
-        # Try common XAMPP location first
-        xampp_path = r"C:\xampp\php\php-win.exe"
-        if os.path.exists(xampp_path):
-            return xampp_path
+        # Prefer php.exe over php-win.exe when we're capturing output
+        # php-win.exe is for GUI apps, php.exe works better with subprocess
+        
+        # Try common XAMPP location first (prefer php.exe)
+        xampp_php_exe = r"C:\xampp\php\php.exe"
+        if os.path.exists(xampp_php_exe):
+            return xampp_php_exe
         
         # Try using 'php' command (works if in PATH)
         php_cmd = shutil.which('php')
@@ -116,6 +119,7 @@ class SyncGUI:
         # Try common locations
         common_paths = [
             r"C:\xampp\php\php.exe",
+            r"C:\xampp\php\php-win.exe",  # Fallback to php-win.exe
             r"C:\php\php.exe",
             r"C:\Program Files\PHP\php.exe",
         ]
@@ -124,7 +128,7 @@ class SyncGUI:
             if os.path.exists(path):
                 return path
         
-        return r"C:\xampp\php\php-win.exe"  # Default fallback
+        return r"C:\xampp\php\php.exe"  # Default fallback to php.exe
     
     def is_admin(self):
         try:
@@ -426,6 +430,12 @@ class SyncGUI:
         if platform.system() == 'Windows':
             # CREATE_NO_WINDOW flag prevents new console window from appearing
             popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            
+            # Also set startupinfo to hide window completely
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            popen_kwargs['startupinfo'] = startupinfo
         
         process = subprocess.Popen(
             [self.python_exe, self.python_script],
@@ -548,6 +558,13 @@ class SyncGUI:
         if platform.system() == 'Windows':
             # CREATE_NO_WINDOW flag prevents new console window from appearing
             popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            
+            # Also set startupinfo to hide window completely
+            import subprocess
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            popen_kwargs['startupinfo'] = startupinfo
         
         process = subprocess.Popen(
             php_args,
