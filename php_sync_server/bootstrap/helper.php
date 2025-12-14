@@ -378,7 +378,7 @@ function retryOperation($operation, $maxRetries = 3, $baseDelay = 100000) {
  * @param string $updatedAfter Optional timestamp filter
  * @return array Remote data
  */
-function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null, $minOrderDate = null) {
+function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null, $resyncDate = null) {
     if (empty($keys)) {
         return [];
     }
@@ -423,49 +423,65 @@ function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null, $minOrderDat
             $sql = "SELECT * FROM `$remote_table_name` WHERE `$remote_key` IN ($keys_str)";
         }
         
-        // For artran (orders): Check both updated_at AND order_date to catch recent orders
-        // This ensures orders with recent order_date but old updated_at are still synced
-        if ($table === 'ubs_ubsstk2015_artran') {
-            if ($updatedAfter) {
-                $sql .= " AND (`$column_updated_at` > '" . $db->escape($updatedAfter) . "' OR order_date > '" . $db->escape($updatedAfter) . "')";
-            }
-            if ($minOrderDate) {
-                $sql .= " AND order_date >= '" . $db->escape($minOrderDate) . "'";
-            }
-        }
-        // For ictran (order_items): Check both updated_at AND parent order's order_date
-        elseif ($table === 'ubs_ubsstk2015_ictran') {
-            // Need to join with orders table to check order_date
-            if ($updatedAfter || $minOrderDate) {
-                // Replace FROM clause to add JOIN (handle both WHERE and no WHERE cases)
+        // Resync mode: Filter by DATE(created_at) = date OR DATE(updated_at) = date
+        if ($resyncDate) {
+            if ($table === 'ubs_ubsstk2015_artran') {
+                $sql .= " AND (DATE(created_at) = '" . $db->escape($resyncDate) . "' OR DATE(updated_at) = '" . $db->escape($resyncDate) . "' OR DATE(order_date) = '" . $db->escape($resyncDate) . "')";
+            } elseif ($table === 'ubs_ubsstk2015_ictran') {
+                // Need to join with orders table to check order_date
                 if (strpos($sql, "FROM `$remote_table_name` WHERE") !== false) {
-                    // Has WHERE clause - insert JOIN before WHERE
                     $sql = str_replace("FROM `$remote_table_name` WHERE", 
                         "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no WHERE", 
                         $sql);
                 } elseif (strpos($sql, "FROM `$remote_table_name`") !== false) {
-                    // No WHERE clause - replace FROM
                     $sql = str_replace("FROM `$remote_table_name`", 
                         "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no", 
                         $sql);
                 }
-                
-                // Update SELECT to use oi.* to avoid duplicate columns from JOIN
                 $sql = str_replace("SELECT *", "SELECT oi.*", $sql);
-                
-                // Add date filters
-                if ($updatedAfter) {
-                    $sql .= " AND (oi.`$column_updated_at` > '" . $db->escape($updatedAfter) . "' OR o.order_date > '" . $db->escape($updatedAfter) . "')";
-                }
-                if ($minOrderDate) {
-                    $sql .= " AND o.order_date >= '" . $db->escape($minOrderDate) . "'";
-                }
+                $sql .= " AND (DATE(oi.created_at) = '" . $db->escape($resyncDate) . "' OR DATE(oi.updated_at) = '" . $db->escape($resyncDate) . "' OR DATE(o.order_date) = '" . $db->escape($resyncDate) . "')";
+            } else {
+                $sql .= " AND (DATE(created_at) = '" . $db->escape($resyncDate) . "' OR DATE(updated_at) = '" . $db->escape($resyncDate) . "')";
             }
         }
-        // For other tables: Use standard updated_at filter
+        // Normal mode: Check both updated_at AND order_date to catch recent orders
         else {
-            if ($updatedAfter) {
-                $sql .= " AND `$column_updated_at` > '" . $db->escape($updatedAfter) . "'";
+            // For artran (orders): Check both updated_at AND order_date to catch recent orders
+            // This ensures orders with recent order_date but old updated_at are still synced
+            if ($table === 'ubs_ubsstk2015_artran') {
+                if ($updatedAfter) {
+                    $sql .= " AND (`$column_updated_at` > '" . $db->escape($updatedAfter) . "' OR order_date > '" . $db->escape($updatedAfter) . "')";
+                }
+            }
+            // For ictran (order_items): Check both updated_at AND parent order's order_date
+            elseif ($table === 'ubs_ubsstk2015_ictran') {
+                // Need to join with orders table to check order_date
+                if ($updatedAfter) {
+                    // Replace FROM clause to add JOIN (handle both WHERE and no WHERE cases)
+                    if (strpos($sql, "FROM `$remote_table_name` WHERE") !== false) {
+                        // Has WHERE clause - insert JOIN before WHERE
+                        $sql = str_replace("FROM `$remote_table_name` WHERE", 
+                            "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no WHERE", 
+                            $sql);
+                    } elseif (strpos($sql, "FROM `$remote_table_name`") !== false) {
+                        // No WHERE clause - replace FROM
+                        $sql = str_replace("FROM `$remote_table_name`", 
+                            "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no", 
+                            $sql);
+                    }
+                    
+                    // Update SELECT to use oi.* to avoid duplicate columns from JOIN
+                    $sql = str_replace("SELECT *", "SELECT oi.*", $sql);
+                    
+                    // Add date filters
+                    $sql .= " AND (oi.`$column_updated_at` > '" . $db->escape($updatedAfter) . "' OR o.order_date > '" . $db->escape($updatedAfter) . "')";
+                }
+            }
+            // For other tables: Use standard updated_at filter
+            else {
+                if ($updatedAfter) {
+                    $sql .= " AND `$column_updated_at` > '" . $db->escape($updatedAfter) . "'";
+                }
             }
         }
         

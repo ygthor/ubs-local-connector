@@ -238,11 +238,13 @@ function batchProcessData($data, $callback, $batchSize = 1000)
 function batchUpsertRemote($table, $records, $batchSize = 1000)
 {
     if (empty($records)) {
-        return;
+        return ['inserts' => [], 'updates' => []];
     }
 
+    $stats = ['inserts' => [], 'updates' => []];
+
     // ✅ SAFE: Use retry logic for reliability
-    retryOperation(function () use ($table, $records, $batchSize) {
+    retryOperation(function () use ($table, $records, $batchSize, &$stats) {
         $db = new mysql();
         $db->connect_remote();
 
@@ -313,7 +315,14 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
             $batch = array_slice($processedRecords, $i, $batchSize);
 
             // Bulk upsert using MySQL's ON DUPLICATE KEY UPDATE
-            $db->bulkUpsert($remote_table_name, $batch, $primary_key);
+            $batchStats = null;
+            $db->bulkUpsert($remote_table_name, $batch, $primary_key, $batchStats);
+            
+            // Merge batch stats into overall stats
+            if ($batchStats !== null) {
+                $stats['inserts'] = array_merge($stats['inserts'], $batchStats['inserts']);
+                $stats['updates'] = array_merge($stats['updates'], $batchStats['updates']);
+            }
 
             $processed += count($batch);
             // ProgressDisplay::display("Processing $remote_table_name", $processed, $totalRecords);
@@ -327,13 +336,17 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         ProgressDisplay::info("Completed high-performance batch upsert for $remote_table_name");
         return true; // Success
     }, 3); // Max 3 retries
+    
+    return $stats;
 }
 
 function batchUpsertUbs($table, $records, $batchSize = 500)
 {
     if (empty($records)) {
-        return;
+        return ['inserts' => [], 'updates' => []];
     }
+    
+    $stats = ['inserts' => [], 'updates' => []];
 
     $arr = parseUbsTable($table);
     $table_name = $arr['table'];
@@ -530,9 +543,11 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         if (isset($existingRecords[$key])) {
             ProgressDisplay::info("🔍 DEBUG: Record with key '$key' exists in DBF - will UPDATE");
             $updateRecords[] = ['key' => $key, 'record' => $record];
+            $stats['updates'][] = $key;
         } else {
             ProgressDisplay::info("🔍 DEBUG: Record with key '$key' NOT found in DBF - will INSERT");
             $insertRecords[] = $record;
+            $stats['inserts'][] = $key;
         }
     }
 
@@ -999,6 +1014,8 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         if (!empty($refNosToSkip)) {
             ProgressDisplay::info("⏭️  Skipped GROSS_BIL/GRAND_BIL recalculation for " . count($refNosToSkip) . " DO type invoice(s)");
         }
+        
+        return $stats;
 
     } catch (\Throwable $e) {
         // ✅ If error occurred and we have a backup, restore it
@@ -3300,7 +3317,7 @@ function validateAndCleanDuplicateOrders()
                     $order_items_delete_sql = "DELETE FROM order_items WHERE order_id IN ($delete_ids_str)";
                     $db->query($order_items_delete_sql);
                     $total_stats['total_queries']++;
-                    $affected_items = mysqli_affected_rows($db->con);
+                    $affected_items = $db->affected_rows();
                     if ($affected_items > 0) {
                         ProgressDisplay::info("    🗑️  Also deleted $affected_items associated order_item(s)");
                     }

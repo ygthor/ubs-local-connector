@@ -29,19 +29,46 @@ register_shutdown_function(function() {
 try {
     $db = new mysql();
     
-    // Get last sync time
-    $last_synced_at = lastSyncAt(); // Commented out for full sync
-    // $last_synced_at = null; // Set to null for FULL SYNC (process all records)
+    // Check for resync date parameter
+    $resync_date = null;
+    $resync_mode = false;
     
-    // Clear sync cache for full sync
-    clearSyncCache();
-    ProgressDisplay::info("🧹 Cleared sync cache for full sync");
-    
-    // If no last sync time, use a date far in the past to get all records
-    if (empty($last_synced_at)) {
-        $last_synced_at = '2025-08-01 00:00:00';
+    // Parse command line arguments
+    $args = $argv ?? [];
+    for ($i = 0; $i < count($args); $i++) {
+        if ($args[$i] === '--resync-date' && isset($args[$i + 1])) {
+            $resync_date = $args[$i + 1];
+            $resync_mode = true;
+            break;
+        }
     }
-    // $last_synced_at = '2025-08-01 00:00:00';
+    
+    if ($resync_mode && $resync_date) {
+        // Validate date format
+        $date_obj = DateTime::createFromFormat('Y-m-d', $resync_date);
+        if (!$date_obj || $date_obj->format('Y-m-d') !== $resync_date) {
+            ProgressDisplay::error("❌ Invalid date format. Please use YYYY-MM-DD format (e.g., 2025-01-15)");
+            exit(1);
+        }
+        
+        ProgressDisplay::info("🔄 RESYNC MODE: Syncing all records where created_at or updated_at = $resync_date");
+        $last_synced_at = null; // Will use date filter instead
+    } else {
+        // Normal sync mode
+        // Get last sync time
+        $last_synced_at = lastSyncAt(); // Commented out for full sync
+        // $last_synced_at = null; // Set to null for FULL SYNC (process all records)
+        
+        // Clear sync cache for full sync
+        clearSyncCache();
+        ProgressDisplay::info("🧹 Cleared sync cache for full sync");
+        
+        // If no last sync time, use a date far in the past to get all records
+        if (empty($last_synced_at)) {
+            $last_synced_at = '2025-08-01 00:00:00';
+        }
+        // $last_synced_at = '2025-08-01 00:00:00';
+    }
     
     // ProgressDisplay::info("Last sync time: $last_synced_at");
     // ProgressDisplay::info("Memory limit set to: " . ini_get('memory_limit'));
@@ -50,10 +77,15 @@ try {
     $totalTables = count($ubsTables);
     
     ProgressDisplay::info("Found $totalTables tables to sync: " . implode(', ', $ubsTables));
-    ProgressDisplay::info("🕐 Syncing records updated after: $last_synced_at");
+    if ($resync_mode) {
+        ProgressDisplay::info("🕐 Resyncing records for date: $resync_date");
+    } else {
+        ProgressDisplay::info("🕐 Syncing records updated after: $last_synced_at");
+    }
     
     $processedTables = 0;
     $syncResults = []; // Track sync results for each table
+    $tableStats = []; // Track insert/update statistics per table
     
     foreach($ubsTables as $ubs_table) {
         $remote_table_name = Converter::table_convert_remote($ubs_table);
@@ -103,6 +135,10 @@ try {
                 if ($isForceSync) {
                     // Force sync: Get ALL records regardless of timestamp or NULL values
                     $countSql = "SELECT COUNT(*) as total FROM `$ubs_table`";
+                } elseif ($resync_mode && $resync_date) {
+                    // Resync mode: Get records where DATE(created_at) = date OR DATE(updated_at) = date
+                    $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` 
+                                 WHERE (DATE(CREATED_ON) = '$resync_date' OR DATE(UPDATED_ON) = '$resync_date')";
                 } else {
                     // Normal sync: Only records updated after last sync
                     $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
@@ -147,6 +183,19 @@ try {
                     
                     if ($isForceSync) {
                         $countSql = "SELECT COUNT(*) as total FROM $remote_table_name";
+                    } elseif ($resync_mode && $resync_date) {
+                        // Resync mode: Check DATE(created_at) = date OR DATE(updated_at) = date
+                        if ($isArtran) {
+                            $countSql = "SELECT COUNT(*) as total FROM $remote_table_name 
+                                        WHERE (DATE(created_at) = '$resync_date' OR DATE(updated_at) = '$resync_date' OR DATE(order_date) = '$resync_date')";
+                        } elseif ($isIctran) {
+                            $countSql = "SELECT COUNT(*) as total FROM $remote_table_name oi
+                                        INNER JOIN orders o ON oi.reference_no = o.reference_no
+                                        WHERE (DATE(oi.created_at) = '$resync_date' OR DATE(oi.updated_at) = '$resync_date' OR DATE(o.order_date) = '$resync_date')";
+                        } else {
+                            $countSql = "SELECT COUNT(*) as total FROM $remote_table_name 
+                                        WHERE (DATE(created_at) = '$resync_date' OR DATE(updated_at) = '$resync_date')";
+                        }
                     } elseif ($isArtran) {
                         // For artran (orders): Check both updated_at AND order_date to catch recent orders
                         $countSql = "SELECT COUNT(*) as total FROM $remote_table_name 
@@ -305,10 +354,21 @@ try {
                                     ($firstRecord[strtoupper($primaryKey)] ?? $firstRecord[$primaryKey] ?? '');
                                 ProgressDisplay::info("🔍 DEBUG: First record to sync - Primary key ($primaryKey): '$primaryKeyValue', Available fields: " . implode(', ', array_keys($firstRecord)));
                                 
-                                executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert) {
+                                $tempUbsStats = ['inserts' => [], 'updates' => []];
+                                executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert, &$tempUbsStats) {
                                     ProgressDisplay::info("⬇️ $ubs_table: Syncing " . count($ubs_data_to_upsert) . " missing remote→UBS");
-                                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                                    $tempUbsStats = batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
                                 }, true);
+                                
+                                // Store statistics
+                                if (!isset($tableStats[$ubs_table])) {
+                                    $tableStats[$ubs_table] = [
+                                        'remote' => ['inserts' => [], 'updates' => []],
+                                        'ubs' => ['inserts' => [], 'updates' => []]
+                                    ];
+                                }
+                                $tableStats[$ubs_table]['ubs']['inserts'] = array_merge($tableStats[$ubs_table]['ubs']['inserts'], $tempUbsStats['inserts']);
+                                $tableStats[$ubs_table]['ubs']['updates'] = array_merge($tableStats[$ubs_table]['ubs']['updates'], $tempUbsStats['updates']);
                             }
                         }
                         unset($allUbsKeys, $missing_records, $allRemoteData);
@@ -375,7 +435,10 @@ try {
                 if (!empty($chunk_keys)) {
                     $updatedAfter = $isForceSync ? null : $last_synced_at;
                     // For artran/ictran, also check order_date (handled in fetchRemoteDataByKeys)
-                    $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, $updatedAfter);
+                    // Pass resync_date if in resync mode
+                    $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, 
+                        ($resync_mode && $resync_date) ? null : $updatedAfter, 
+                        ($resync_mode && $resync_date) ? $resync_date : null);
                 }
                 
                 // ✅ FAST PATH: If no remote data, skip syncEntity (like main_init.php)
@@ -397,17 +460,32 @@ try {
                 // ✅ SAFE: Use transaction wrapper for data integrity
                 // Use batch processing for better performance
                 if (!empty($remote_data_to_upsert) || !empty($ubs_data_to_upsert)) {
-                    executeSyncWithTransaction(function() use ($ubs_table, $remote_data_to_upsert, $ubs_data_to_upsert) {
+                    $remoteStats = ['inserts' => [], 'updates' => []];
+                    $ubsStats = ['inserts' => [], 'updates' => []];
+                    
+                    executeSyncWithTransaction(function() use ($ubs_table, $remote_data_to_upsert, $ubs_data_to_upsert, &$remoteStats, &$ubsStats) {
                         if (!empty($remote_data_to_upsert)) {
                             ProgressDisplay::info("⬆️ $ubs_table: " . count($remote_data_to_upsert) . " UBS→Remote");
-                            batchUpsertRemote($ubs_table, $remote_data_to_upsert);
+                            $remoteStats = batchUpsertRemote($ubs_table, $remote_data_to_upsert);
                         }
 
                         if (!empty($ubs_data_to_upsert)) {
                             ProgressDisplay::info("⬇️ $ubs_table: " . count($ubs_data_to_upsert) . " Remote→UBS");
-                            batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                            $ubsStats = batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
                         }
                     }, true); // Use transactions
+                    
+                    // Store statistics for this table
+                    if (!isset($tableStats[$ubs_table])) {
+                        $tableStats[$ubs_table] = [
+                            'remote' => ['inserts' => [], 'updates' => []],
+                            'ubs' => ['inserts' => [], 'updates' => []]
+                        ];
+                    }
+                    $tableStats[$ubs_table]['remote']['inserts'] = array_merge($tableStats[$ubs_table]['remote']['inserts'], $remoteStats['inserts']);
+                    $tableStats[$ubs_table]['remote']['updates'] = array_merge($tableStats[$ubs_table]['remote']['updates'], $remoteStats['updates']);
+                    $tableStats[$ubs_table]['ubs']['inserts'] = array_merge($tableStats[$ubs_table]['ubs']['inserts'], $ubsStats['inserts']);
+                    $tableStats[$ubs_table]['ubs']['updates'] = array_merge($tableStats[$ubs_table]['ubs']['updates'], $ubsStats['updates']);
                 }
                 
                 $processedRecords += count($ubs_data);
@@ -505,11 +583,22 @@ try {
                             $ubs_data_to_upsert = $comparedData['ubs_data'];
                             
                             if (!empty($ubs_data_to_upsert)) {
-                                executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert) {
+                                $tempUbsStats2 = ['inserts' => [], 'updates' => []];
+                                executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert, &$tempUbsStats2) {
                                     $tableLabel = $isArtran ? 'orders' : 'order_items';
                                     ProgressDisplay::info("⬇️ " . ucfirst($tableLabel) . ": Syncing " . count($ubs_data_to_upsert) . " missing remote→UBS record(s)");
-                                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                                    $tempUbsStats2 = batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
                                 }, true);
+                                
+                                // Store statistics
+                                if (!isset($tableStats[$ubs_table])) {
+                                    $tableStats[$ubs_table] = [
+                                        'remote' => ['inserts' => [], 'updates' => []],
+                                        'ubs' => ['inserts' => [], 'updates' => []]
+                                    ];
+                                }
+                                $tableStats[$ubs_table]['ubs']['inserts'] = array_merge($tableStats[$ubs_table]['ubs']['inserts'], $tempUbsStats2['inserts']);
+                                $tableStats[$ubs_table]['ubs']['updates'] = array_merge($tableStats[$ubs_table]['ubs']['updates'], $tempUbsStats2['updates']);
                             }
                         }
                         
@@ -620,6 +709,121 @@ try {
         // Don't fail the entire sync if duplicate cleanup fails
     }
     
+    // 📋 Display detailed summary with inserts/updates per table
+    ProgressDisplay::info("");
+    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    ProgressDisplay::info("📋 DETAILED SYNC SUMMARY (Inserts/Updates per Table)");
+    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
+    $logContent = [];
+    $logContent[] = "=" . str_repeat("=", 80);
+    $logContent[] = "SYNC RUN SUMMARY - " . date('Y-m-d H:i:s');
+    $logContent[] = "=" . str_repeat("=", 80);
+    $logContent[] = "";
+    
+    foreach ($tableStats as $table => $stats) {
+        $remote_table_name = Converter::table_convert_remote($table);
+        $tableLabel = $remote_table_name ?: $table;
+        
+        // Remote (UBS → Remote) statistics
+        $remoteInserts = count($stats['remote']['inserts']);
+        $remoteUpdates = count($stats['remote']['updates']);
+        $remoteInsertKeys = $stats['remote']['inserts'];
+        $remoteUpdateKeys = $stats['remote']['updates'];
+        
+        // UBS (Remote → UBS) statistics
+        $ubsInserts = count($stats['ubs']['inserts']);
+        $ubsUpdates = count($stats['ubs']['updates']);
+        $ubsInsertKeys = $stats['ubs']['inserts'];
+        $ubsUpdateKeys = $stats['ubs']['updates'];
+        
+        // Display summary
+        ProgressDisplay::info("");
+        ProgressDisplay::info("📁 Table: $tableLabel");
+        
+        // Remote summary
+        if ($remoteInserts > 0 || $remoteUpdates > 0) {
+            ProgressDisplay::info("  ⬆️  UBS → Remote:");
+            ProgressDisplay::info("     Insert: $remoteInserts");
+            if ($remoteInserts > 0) {
+                $keysDisplay = implode(', ', array_slice($remoteInsertKeys, 0, 10));
+                if (count($remoteInsertKeys) > 10) {
+                    $keysDisplay .= '... (+' . (count($remoteInsertKeys) - 10) . ' more)';
+                }
+                ProgressDisplay::info("     - " . $keysDisplay);
+            }
+            ProgressDisplay::info("     Update: $remoteUpdates");
+            if ($remoteUpdates > 0) {
+                $keysDisplay = implode(', ', array_slice($remoteUpdateKeys, 0, 10));
+                if (count($remoteUpdateKeys) > 10) {
+                    $keysDisplay .= '... (+' . (count($remoteUpdateKeys) - 10) . ' more)';
+                }
+                ProgressDisplay::info("     - " . $keysDisplay);
+            }
+        }
+        
+        // UBS summary
+        if ($ubsInserts > 0 || $ubsUpdates > 0) {
+            ProgressDisplay::info("  ⬇️  Remote → UBS:");
+            ProgressDisplay::info("     Insert: $ubsInserts");
+            if ($ubsInserts > 0) {
+                $keysDisplay = implode(', ', array_slice($ubsInsertKeys, 0, 10));
+                if (count($ubsInsertKeys) > 10) {
+                    $keysDisplay .= '... (+' . (count($ubsInsertKeys) - 10) . ' more)';
+                }
+                ProgressDisplay::info("     - " . $keysDisplay);
+            }
+            ProgressDisplay::info("     Update: $ubsUpdates");
+            if ($ubsUpdates > 0) {
+                $keysDisplay = implode(', ', array_slice($ubsUpdateKeys, 0, 10));
+                if (count($ubsUpdateKeys) > 10) {
+                    $keysDisplay .= '... (+' . (count($ubsUpdateKeys) - 10) . ' more)';
+                }
+                ProgressDisplay::info("     - " . $keysDisplay);
+            }
+        }
+        
+        // Log to file
+        $logContent[] = "Table: $tableLabel";
+        if ($remoteInserts > 0 || $remoteUpdates > 0) {
+            $logContent[] = "  UBS → Remote:";
+            $logContent[] = "    Insert: $remoteInserts";
+            if ($remoteInserts > 0) {
+                $logContent[] = "    - " . implode(', ', $remoteInsertKeys);
+            }
+            $logContent[] = "    Update: $remoteUpdates";
+            if ($remoteUpdates > 0) {
+                $logContent[] = "    - " . implode(', ', $remoteUpdateKeys);
+            }
+        }
+        if ($ubsInserts > 0 || $ubsUpdates > 0) {
+            $logContent[] = "  Remote → UBS:";
+            $logContent[] = "    Insert: $ubsInserts";
+            if ($ubsInserts > 0) {
+                $logContent[] = "    - " . implode(', ', $ubsInsertKeys);
+            }
+            $logContent[] = "    Update: $ubsUpdates";
+            if ($ubsUpdates > 0) {
+                $logContent[] = "    - " . implode(', ', $ubsUpdateKeys);
+            }
+        }
+        $logContent[] = "";
+    }
+    
+    $logContent[] = "=" . str_repeat("=", 80);
+    $logContent[] = "";
+    
+    // Write log to file
+    $logDir = __DIR__ . '/logs';
+    if (!is_dir($logDir)) {
+        mkdir($logDir, 0755, true);
+    }
+    $logFile = $logDir . '/sync_summary_' . date('Y-m-d_His') . '.log';
+    file_put_contents($logFile, implode("\n", $logContent));
+    ProgressDisplay::info("");
+    ProgressDisplay::info("📝 Log saved to: $logFile");
+    
+    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     ProgressDisplay::complete("🎉 Sync process completed successfully! All " . count($syncResults) . " tables processed.");
     
 } catch (Exception $e) {

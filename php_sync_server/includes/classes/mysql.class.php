@@ -36,6 +36,11 @@ class mysql
 		return $query;
 	}
 
+	function affected_rows()
+	{
+		return mysqli_affected_rows($this->con);
+	}
+
 	function escape($string)
 	{
 		$string = mysqli_real_escape_string($this->con, $string);
@@ -373,10 +378,18 @@ class mysql
 	}
 
 	// High-performance bulk upsert method
-	function bulkUpsert($table, $records, $primaryKey)
+	function bulkUpsert($table, $records, $primaryKey, &$stats = null)
 	{
 		if (empty($records)) {
 			return;
+		}
+		
+		// Initialize stats array if provided
+		if ($stats !== null) {
+			$stats = [
+				'inserts' => [],
+				'updates' => []
+			];
 		}
 
 		$table_name = strpos($table, '.') !== false ? $table : "`$table`";
@@ -523,6 +536,11 @@ class mysql
 			
 			// Skip if record already exists (we'll update it separately)
 			if ($key_value !== null && isset($existing_keys[$key_value])) {
+				// Track update in stats
+				if ($stats !== null) {
+					$stats['updates'][] = $key_value;
+				}
+				
 				// ✅ FIX: Record exists - first ensure only ONE record exists (delete duplicates)
 				$existing = $existing_keys[$key_value];
 				if (count($existing) > 1) {
@@ -615,6 +633,10 @@ class mysql
 						if (isset($record_key_map[$existing_key])) {
 							foreach ($record_key_map[$existing_key] as $idx) {
 								$indices_to_remove[$idx] = true;
+								// Track update in stats
+								if ($stats !== null) {
+									$stats['updates'][] = $existing_key;
+								}
 								// Record now exists, update it instead
 								$this->update($table, [$primaryKey => $existing_key], $records_to_insert[$idx]);
 								dump("⚠️  Record with $primaryKey='$existing_key' was inserted between check and insert - updated instead");
@@ -665,6 +687,16 @@ class mysql
 		if ($affectedRows === 0 && count($records_to_insert) > 0) {
 			// Warning: No rows affected but we tried to insert
 			dump("WARNING: bulkUpsert executed but 0 rows affected for table $table_name");
+		}
+		
+		// Track inserts in stats
+		if ($stats !== null && !empty($records_to_insert)) {
+			foreach ($records_to_insert as $record) {
+				$key_value = $record[$primaryKey] ?? null;
+				if ($key_value !== null) {
+					$stats['inserts'][] = $key_value;
+				}
+			}
 		}
 		
 		return $result;

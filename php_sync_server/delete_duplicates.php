@@ -224,7 +224,7 @@ try {
                             $db->query($related_delete_sql);
                             $total_stats['total_queries']++;
                             
-                            $affected_related = mysqli_affected_rows($db->con);
+                            $affected_related = $db->affected_rows();
                             if ($affected_related > 0) {
                                 $table_related_deleted += $affected_related;
                                 $total_stats['total_related_deleted'] += $affected_related;
