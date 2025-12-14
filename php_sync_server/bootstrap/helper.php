@@ -427,6 +427,11 @@ function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null) {
             $sql .= " AND `$column_updated_at` > '" . $db->escape($updatedAfter) . "'";
         }
         
+        // Add date filter for artran/ictran force sync
+        if ($minOrderDate) {
+            $sql .= " AND `order_date` >= '" . $db->escape($minOrderDate) . "'";
+        }
+        
         return $db->get($sql);
     } catch (Exception $e) {
         ProgressDisplay::warning("Error fetching remote data by keys: " . $e->getMessage());

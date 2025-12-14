@@ -1619,6 +1619,37 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
         // Special handling for order_items syncing to ictran
         if ($remote_table_name == 'order_items') {
+            // Format DATE field if it's already set (from mapping) - ensure it's YYYY-MM-DD format
+            if (isset($converted['DATE'])) {
+                $dateValue = $converted['DATE'];
+                // Handle datetime/timestamp format - extract date part only
+                if (is_numeric($dateValue)) {
+                    // If it's a timestamp integer
+                    $converted['DATE'] = date('Y-m-d', $dateValue);
+                } elseif (is_string($dateValue)) {
+                    // If it's a string, try to parse it
+                    // Handle datetime format (YYYY-MM-DD HH:MM:SS) or date format (YYYY-MM-DD)
+                    if (preg_match('/^(\d{4}-\d{2}-\d{2})(\s\d{2}:\d{2}:\d{2})?/', $dateValue, $matches)) {
+                        // Extract just the date part (YYYY-MM-DD)
+                        $converted['DATE'] = $matches[1];
+                    } else {
+                        // Try strtotime as fallback
+                        $timestamp = strtotime($dateValue);
+                        if ($timestamp !== false) {
+                            $converted['DATE'] = date('Y-m-d', $timestamp);
+                        }
+                        // If strtotime fails, keep as-is (might already be YYYY-MM-DD)
+                    }
+                } else {
+                    // If it's already a DateTime object or other format, try to convert
+                    $timestamp = strtotime((string)$dateValue);
+                    if ($timestamp !== false) {
+                        $converted['DATE'] = date('Y-m-d', $timestamp);
+                    } else {
+                        $converted['DATE'] = date('Y-m-d'); // Fallback to today
+                    }
+                }
+            }
             // Format TRANCODE as strpad 4 based on item_count (e.g., 1 => 0001)
             if (isset($converted['TRANCODE']) && isset($dataRow['item_count'])) {
                 $itemCount = (int)$dataRow['item_count'];
@@ -1826,12 +1857,34 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                     // Set DATE = order_date from orders (format: YYYY-MM-DD)
                     if (isset($orderData['order_date'])) {
                         $orderDate = $orderData['order_date'];
-                        $timestamp = strtotime($orderDate);
-                        if ($timestamp !== false) {
-                            // Format as YYYY-MM-DD (e.g., "2025-08-01")
-                            $converted['DATE'] = date('Y-m-d', $timestamp);
+                        // Handle datetime/timestamp format - extract date part only
+                        if (is_numeric($orderDate)) {
+                            // If it's a timestamp integer
+                            $converted['DATE'] = date('Y-m-d', $orderDate);
+                        } elseif (is_string($orderDate)) {
+                            // If it's a string, try to parse it
+                            // Handle datetime format (YYYY-MM-DD HH:MM:SS) or date format (YYYY-MM-DD)
+                            if (preg_match('/^(\d{4}-\d{2}-\d{2})(\s\d{2}:\d{2}:\d{2})?/', $orderDate, $matches)) {
+                                // Extract just the date part (YYYY-MM-DD)
+                                $converted['DATE'] = $matches[1];
+                            } else {
+                                // Try strtotime as fallback
+                                $timestamp = strtotime($orderDate);
+                                if ($timestamp !== false) {
+                                    $converted['DATE'] = date('Y-m-d', $timestamp);
+                                } else {
+                                    // Last resort: use as-is (might already be YYYY-MM-DD)
+                                    $converted['DATE'] = $orderDate;
+                                }
+                            }
                         } else {
-                            $converted['DATE'] = $orderDate;
+                            // If it's already a DateTime object or other format, try to convert
+                            $timestamp = strtotime((string)$orderDate);
+                            if ($timestamp !== false) {
+                                $converted['DATE'] = date('Y-m-d', $timestamp);
+                            } else {
+                                $converted['DATE'] = date('Y-m-d'); // Fallback to today
+                            }
                         }
                     }
 
@@ -1870,12 +1923,34 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $orderData = $db->first($orderSql);
                 if ($orderData && isset($orderData['order_date'])) {
                     $orderDate = $orderData['order_date'];
-                    $timestamp = strtotime($orderDate);
-                    if ($timestamp !== false) {
-                        // Format as YYYY-MM-DD (e.g., "2025-08-01")
-                        $converted['DATE'] = date('Y-m-d', $timestamp);
+                    // Handle datetime/timestamp format - extract date part only
+                    if (is_numeric($orderDate)) {
+                        // If it's a timestamp integer
+                        $converted['DATE'] = date('Y-m-d', $orderDate);
+                    } elseif (is_string($orderDate)) {
+                        // If it's a string, try to parse it
+                        // Handle datetime format (YYYY-MM-DD HH:MM:SS) or date format (YYYY-MM-DD)
+                        if (preg_match('/^(\d{4}-\d{2}-\d{2})(\s\d{2}:\d{2}:\d{2})?/', $orderDate, $matches)) {
+                            // Extract just the date part (YYYY-MM-DD)
+                            $converted['DATE'] = $matches[1];
+                        } else {
+                            // Try strtotime as fallback
+                            $timestamp = strtotime($orderDate);
+                            if ($timestamp !== false) {
+                                $converted['DATE'] = date('Y-m-d', $timestamp);
+                            } else {
+                                // Last resort: use as-is (might already be YYYY-MM-DD)
+                                $converted['DATE'] = $orderDate;
+                            }
+                        }
                     } else {
-                        $converted['DATE'] = $orderDate;
+                        // If it's already a DateTime object or other format, try to convert
+                        $timestamp = strtotime((string)$orderDate);
+                        if ($timestamp !== false) {
+                            $converted['DATE'] = date('Y-m-d', $timestamp);
+                        } else {
+                            $converted['DATE'] = date('Y-m-d'); // Fallback to today
+                        }
                     }
                 }
             }
@@ -3179,4 +3254,266 @@ function validateAndCleanDuplicateOrders()
         'total_queries' => $total_stats['total_queries'],
         'memory_used_mb' => $memory_used
     ];
+}
+
+/**
+ * FORCE SYNC artran (orders) and ictran (order_items) with date filter
+ * Always syncs ALL records with order_date >= 2025-12-12, regardless of:
+ * - updated_at timestamps
+ * - sync logs
+ * - existing records
+ * This is a true force sync that will upsert everything matching the date filter
+ */
+function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate = '2025-12-12')
+{
+    $result = [
+        'success' => false,
+        'artran_count' => 0,
+        'ictran_count' => 0,
+        'error' => null
+    ];
+
+    try {
+        // Create connections if not provided
+        if ($db_local === null) {
+            $db_local = new mysql();
+        }
+
+        if ($db_remote === null) {
+            $db_remote = new mysql();
+            $db_remote->connect_remote();
+        }
+
+        ProgressDisplay::info("📁 Syncing artran (orders) and ictran (order_items) with order_date >= $minOrderDate");
+
+        // ========== SYNC ARTRAN (ORDERS) ==========
+        $ubs_artran_table = 'ubs_ubsstk2015_artran';
+        $remoteArtranTable = 'orders';
+
+        ProgressDisplay::info("📊 Syncing artran (orders) from local MySQL to remote MySQL...");
+
+        // Check if table exists first
+        $tableCheckSql = "SHOW TABLES LIKE '$ubs_artran_table'";
+        $tableExists = $db_local->first($tableCheckSql);
+
+        if (empty($tableExists)) {
+            ProgressDisplay::warning("⚠️  Table '$ubs_artran_table' does not exist in local database.");
+            $artranTotalRows = 0;
+        } else {
+            // Force sync with date filter: Get all records with DATE >= minOrderDate
+            $artranCountSql = "SELECT COUNT(*) as total FROM `$ubs_artran_table` WHERE DATE >= '$minOrderDate'";
+            $artranTotalRows = $db_local->first($artranCountSql)['total'] ?? 0;
+            ProgressDisplay::info("🔄 FORCE SYNC: Syncing artran records with DATE >= $minOrderDate");
+        }
+
+        ProgressDisplay::info("Total artran rows to process: $artranTotalRows");
+
+        $artranCount = 0;
+
+        if ($artranTotalRows > 0) {
+            $chunkSize = 1000;
+            $offset = 0;
+
+            while ($offset < $artranTotalRows) {
+                ProgressDisplay::info("📦 Fetching artran chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
+
+                // Fetch a chunk of data with date filter
+                $sql = "
+                    SELECT * FROM `$ubs_artran_table`
+                    WHERE DATE >= '$minOrderDate'
+                    ORDER BY DATE ASC, COALESCE(UPDATED_ON, '1970-01-01') ASC
+                    LIMIT $chunkSize OFFSET $offset
+                ";
+                $artran_ubs_data = $db_local->get($sql);
+
+                if (empty($artran_ubs_data)) {
+                    break; // No more data
+                }
+
+                // Validate timestamps
+                $artran_ubs_data = validateAndFixUpdatedOn($artran_ubs_data, $ubs_artran_table);
+
+                // FORCE SYNC: Fetch ALL remote records with date filter (not just matching keys)
+                $artran_remote_data = [];
+                $db_remote_check = new mysql();
+                $db_remote_check->connect_remote();
+                $remoteSql = "SELECT * FROM `$remoteArtranTable` WHERE order_date >= '$minOrderDate'";
+                $artran_remote_data = $db_remote_check->get($remoteSql);
+                $db_remote_check->close();
+
+                // FORCE SYNC: Convert all UBS data to remote format and upsert (ignore comparisons)
+                $artran_remote_data_to_upsert = [];
+                foreach ($artran_ubs_data as $row) {
+                    $converted = convert($remoteArtranTable, $row, 'to_remote');
+                    if (!empty($converted)) {
+                        $artran_remote_data_to_upsert[] = $converted;
+                    }
+                }
+
+                // Batch upsert to remote (FORCE - always sync all records)
+                if (!empty($artran_remote_data_to_upsert)) {
+                    ProgressDisplay::info("⬆️ FORCE Upserting " . count($artran_remote_data_to_upsert) . " artran records to remote...");
+                    batchUpsertRemote($ubs_artran_table, $artran_remote_data_to_upsert);
+                    $artranCount += count($artran_remote_data_to_upsert);
+                }
+
+                // Also sync remote → UBS for any missing records
+                if (!empty($artran_remote_data)) {
+                    $artran_ubs_data_to_upsert = [];
+                    foreach ($artran_remote_data as $row) {
+                        $converted = convert($remoteArtranTable, $row, 'to_ubs');
+                        if (!empty($converted)) {
+                            $artran_ubs_data_to_upsert[] = $converted;
+                        }
+                    }
+                    
+                    if (!empty($artran_ubs_data_to_upsert)) {
+                        ProgressDisplay::info("⬇️ FORCE Upserting " . count($artran_ubs_data_to_upsert) . " artran records to UBS...");
+                        executeSyncWithTransaction(function() use ($ubs_artran_table, $artran_ubs_data_to_upsert) {
+                            batchUpsertUbs($ubs_artran_table, $artran_ubs_data_to_upsert);
+                        }, true);
+                    }
+                }
+
+                // Free memory and move to next chunk
+                unset($artran_ubs_data, $artran_remote_data, $artran_comparedData, $artran_remote_data_to_upsert, $artran_ubs_data_to_upsert);
+                gc_collect_cycles();
+
+                $offset += $chunkSize;
+
+                // Small delay to avoid locking issues
+                usleep(300000); // 0.3s
+            }
+
+            ProgressDisplay::info("✅ Finished syncing artran ($artranCount records)");
+        } else {
+            ProgressDisplay::info("⚠️  No artran records to sync");
+        }
+
+        // ========== SYNC ICTRAN (ORDER_ITEMS) ==========
+        $ubs_ictran_table = 'ubs_ubsstk2015_ictran';
+        $remoteIctranTable = 'order_items';
+
+        ProgressDisplay::info("📊 Syncing ictran (order_items) from local MySQL to remote MySQL...");
+
+        // Check if table exists first
+        $tableCheckSql = "SHOW TABLES LIKE '$ubs_ictran_table'";
+        $tableExists = $db_local->first($tableCheckSql);
+
+        if (empty($tableExists)) {
+            ProgressDisplay::warning("⚠️  Table '$ubs_ictran_table' does not exist in local database.");
+            $ictranTotalRows = 0;
+        } else {
+            // Force sync with date filter: Get all records with DATE >= minOrderDate
+            // For ictran, we need to join with orders to filter by order_date
+            $ictranCountSql = "
+                SELECT COUNT(*) as total 
+                FROM `$ubs_ictran_table` ictran
+                INNER JOIN `$ubs_artran_table` artran ON ictran.REFNO = artran.REFNO
+                WHERE artran.DATE >= '$minOrderDate'
+            ";
+            $ictranTotalRows = $db_local->first($ictranCountSql)['total'] ?? 0;
+            ProgressDisplay::info("🔄 FORCE SYNC: Syncing ictran records with order_date >= $minOrderDate");
+        }
+
+        ProgressDisplay::info("Total ictran rows to process: $ictranTotalRows");
+
+        $ictranCount = 0;
+
+        if ($ictranTotalRows > 0) {
+            $chunkSize = 1000;
+            $offset = 0;
+
+            while ($offset < $ictranTotalRows) {
+                ProgressDisplay::info("📦 Fetching ictran chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
+
+                // Fetch a chunk of data with date filter (join with artran to filter by order_date)
+                $sql = "
+                    SELECT ictran.* 
+                    FROM `$ubs_ictran_table` ictran
+                    INNER JOIN `$ubs_artran_table` artran ON ictran.REFNO = artran.REFNO
+                    WHERE artran.DATE >= '$minOrderDate'
+                    ORDER BY artran.DATE ASC, ictran.ITEMCOUNT ASC, COALESCE(ictran.UPDATED_ON, '1970-01-01') ASC
+                    LIMIT $chunkSize OFFSET $offset
+                ";
+                $ictran_ubs_data = $db_local->get($sql);
+
+                if (empty($ictran_ubs_data)) {
+                    break; // No more data
+                }
+
+                // Validate timestamps
+                $ictran_ubs_data = validateAndFixUpdatedOn($ictran_ubs_data, $ubs_ictran_table);
+
+                // FORCE SYNC: Fetch ALL remote records with date filter (not just matching keys)
+                $ictran_remote_data = [];
+                $db_remote_check = new mysql();
+                $db_remote_check->connect_remote();
+                $remoteSql = "SELECT oi.* FROM `$remoteIctranTable` oi 
+                             INNER JOIN `$remoteArtranTable` o ON oi.reference_no = o.reference_no 
+                             WHERE o.order_date >= '$minOrderDate'";
+                $ictran_remote_data = $db_remote_check->get($remoteSql);
+                $db_remote_check->close();
+
+                // FORCE SYNC: Convert all UBS data to remote format and upsert (ignore comparisons)
+                $ictran_remote_data_to_upsert = [];
+                foreach ($ictran_ubs_data as $row) {
+                    $converted = convert($remoteIctranTable, $row, 'to_remote');
+                    if (!empty($converted)) {
+                        $ictran_remote_data_to_upsert[] = $converted;
+                    }
+                }
+
+                // Batch upsert to remote (FORCE - always sync all records)
+                if (!empty($ictran_remote_data_to_upsert)) {
+                    ProgressDisplay::info("⬆️ FORCE Upserting " . count($ictran_remote_data_to_upsert) . " ictran records to remote...");
+                    batchUpsertRemote($ubs_ictran_table, $ictran_remote_data_to_upsert);
+                    $ictranCount += count($ictran_remote_data_to_upsert);
+                }
+
+                // Also sync remote → UBS for any missing records
+                if (!empty($ictran_remote_data)) {
+                    $ictran_ubs_data_to_upsert = [];
+                    foreach ($ictran_remote_data as $row) {
+                        $converted = convert($remoteIctranTable, $row, 'to_ubs');
+                        if (!empty($converted)) {
+                            $ictran_ubs_data_to_upsert[] = $converted;
+                        }
+                    }
+                    
+                    if (!empty($ictran_ubs_data_to_upsert)) {
+                        ProgressDisplay::info("⬇️ FORCE Upserting " . count($ictran_ubs_data_to_upsert) . " ictran records to UBS...");
+                        executeSyncWithTransaction(function() use ($ubs_ictran_table, $ictran_ubs_data_to_upsert) {
+                            batchUpsertUbs($ubs_ictran_table, $ictran_ubs_data_to_upsert);
+                        }, true);
+                    }
+                }
+
+                // Free memory and move to next chunk
+                unset($ictran_ubs_data, $ictran_remote_data, $ictran_comparedData, $ictran_remote_data_to_upsert, $ictran_ubs_data_to_upsert);
+                gc_collect_cycles();
+
+                $offset += $chunkSize;
+
+                // Small delay to avoid locking issues
+                usleep(300000); // 0.3s
+            }
+
+            ProgressDisplay::info("✅ Finished syncing ictran ($ictranCount records)");
+        } else {
+            ProgressDisplay::info("⚠️  No ictran records to sync");
+        }
+
+        $result['success'] = true;
+        $result['artran_count'] = $artranCount;
+        $result['ictran_count'] = $ictranCount;
+
+        ProgressDisplay::info("✅ Successfully synced artran ($artranCount records) and ictran ($ictranCount records)");
+    } catch (Exception $e) {
+        $result['error'] = $e->getMessage();
+        ProgressDisplay::error("❌ Error syncing artran and ictran: " . $e->getMessage());
+        throw $e;
+    }
+
+    return $result;
 }

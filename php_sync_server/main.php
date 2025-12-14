@@ -128,11 +128,13 @@ try {
             $remoteCount = 0;
             $remote_data = []; // Will be fetched per chunk if needed
             
-            // Check if this is artran table (needs special handling for orders)
+            // Check if this is artran (orders) or ictran (order_items) - needs special handling
             $isArtran = ($ubs_table === 'ubs_ubsstk2015_artran');
+            $isIctran = ($ubs_table === 'ubs_ubsstk2015_ictran');
+            $needsSpecialHandling = ($isArtran || $isIctran);
             
-            // Only check remote count if we have UBS data to compare, OR if it's artran (always check for orders)
-            if ($ubsCount > 0 || $isArtran) {
+            // Only check remote count if we have UBS data to compare, OR if it's artran/ictran (always check for orders/order_items)
+            if ($ubsCount > 0 || $needsSpecialHandling) {
                 try {
                     $db_remote_check = new mysql();
                     $db_remote_check->connect_remote();
@@ -146,12 +148,13 @@ try {
                     }
                     $remoteCount = $db_remote_check->first($countSql)['total'] ?? 0;
                     
-                    // For artran, also check total count if no recent updates
-                    if ($isArtran && $remoteCount == 0) {
+                    // For artran/ictran, also check total count if no recent updates
+                    if ($needsSpecialHandling && $remoteCount == 0) {
                         $totalRemoteSql = "SELECT COUNT(*) as total FROM $remote_table_name";
                         $totalRemoteCount = $db_remote_check->first($totalRemoteSql)['total'] ?? 0;
                         if ($totalRemoteCount > 0) {
-                            ProgressDisplay::info("📊 Artran: $totalRemoteCount total orders in remote (none updated recently)");
+                            $tableLabel = $isArtran ? 'orders' : 'order_items';
+                            ProgressDisplay::info("📊 " . ucfirst($tableLabel) . ": $totalRemoteCount total records in remote (none updated recently)");
                         }
                     }
                     
@@ -162,15 +165,16 @@ try {
             }
             
             // ✅ OPTIMIZED: If no data on either side, skip with concise message
-            // BUT: For artran (orders), always check remote even if local is empty
-            if ($ubsCount == 0 && $remoteCount == 0 && !$isArtran) {
+            // BUT: For artran (orders) and ictran (order_items), always check remote even if local is empty
+            if ($ubsCount == 0 && $remoteCount == 0 && !$needsSpecialHandling) {
                 ProgressDisplay::info("⏭️  SKIP $ubs_table (no data)");
                 continue;
             }
             
-            // Special handling for artran: Always check remote for missing orders
-            if ($isArtran && $ubsCount == 0) {
-                ProgressDisplay::info("🔍 Artran: No local updates, checking remote for missing orders...");
+            // Special handling for artran/ictran: Always check remote for missing records
+            if ($needsSpecialHandling && $ubsCount == 0) {
+                $tableLabel = $isArtran ? 'orders' : 'order_items';
+                ProgressDisplay::info("🔍 " . ucfirst($tableLabel) . ": No local updates, checking remote for missing records...");
             }
             
             // Only show detailed info if there's actual data to process
@@ -314,7 +318,8 @@ try {
                 // Fetch only matching remote records for this chunk
                 $chunk_remote_data = [];
                 if (!empty($chunk_keys)) {
-                    $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, $isForceSync ? null : $last_synced_at);
+                    $updatedAfter = ($isForceSync || $isForceSyncWithDate) ? null : $last_synced_at;
+                    $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, $updatedAfter, $isForceSyncWithDate ? $minOrderDate : null);
                 }
                 
                 // ✅ FAST PATH: If no remote data, skip syncEntity (like main_init.php)
