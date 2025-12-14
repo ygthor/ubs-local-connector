@@ -484,9 +484,24 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         throw new Exception("Failed to read existing records from $table_name: " . $e->getMessage());
     }
 
+    // ✅ DEBUG: Log existing records count
+    $existingCount = count($existingRecords);
+    if ($existingCount > 0) {
+        $existingKeys = array_keys($existingRecords);
+        ProgressDisplay::info("🔍 DEBUG: Found $existingCount existing record(s) in $table_name DBF. Keys: " . implode(', ', array_slice($existingKeys, 0, 10)) . ($existingCount > 10 ? '...' : ''));
+    } else {
+        ProgressDisplay::info("🔍 DEBUG: No existing records found in $table_name DBF (file is empty or new)");
+    }
+
     // Categorize records (store only keys, not row objects since they can't be reused)
     foreach ($records as $record) {
         $key = getRecordKey($record, $keyField);
+        
+        // ✅ DEBUG: Log categorization decision
+        if (empty($key)) {
+            ProgressDisplay::warning("⚠️  WARNING: Record has empty key, skipping. Available fields: " . implode(', ', array_keys($record)));
+            continue;
+        }
 
         // Track REFNO for artran recalculation (only for ictran table)
         // Skip recalculation for TYPE='DO' (Delivery Order - inventory only)
@@ -513,8 +528,10 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         }
 
         if (isset($existingRecords[$key])) {
+            ProgressDisplay::info("🔍 DEBUG: Record with key '$key' exists in DBF - will UPDATE");
             $updateRecords[] = ['key' => $key, 'record' => $record];
         } else {
+            ProgressDisplay::info("🔍 DEBUG: Record with key '$key' NOT found in DBF - will INSERT");
             $insertRecords[] = $record;
         }
     }
@@ -594,13 +611,15 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                         while ($row = $batchEditor->nextRecord()) {
                             $rowKey = getRecordKey($row, $keyField);
                             if ($rowKey === $key) {
+                                ProgressDisplay::info("🔍 DEBUG: Found record with key '$key' in DBF, updating...");
                                 updateUbsRecord($batchEditor, $row, $record, $table_name);
                                 $found = true;
+                                ProgressDisplay::info("✅ DEBUG: Successfully updated record with key '$key' in DBF");
                                 break;
                             }
                         }
                         if (!$found) {
-                            ProgressDisplay::warning("Record with key '$key' not found for update in $table_name");
+                            ProgressDisplay::warning("⚠️  Record with key '$key' not found for update in $table_name - this should not happen if it was detected as existing");
                         }
                     }
                     
@@ -710,7 +729,7 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                         $insertedCount = 0;
                         foreach ($batch as $record) {
                             try {
-                                insertUbsRecord($batchEditor, $record, $table_name);
+                                insertUbsRecord($batchEditor, $record, $table_name, $table, $keyField);
                                 $insertedCount++;
                             } catch (\Throwable $insertError) {
                                 ProgressDisplay::error("❌ Failed to insert record into $table_name: " . $insertError->getMessage());
@@ -1303,6 +1322,7 @@ function updateUbsRecord($editor, $row, $record, $table_name)
         $columnMap[$colName] = $column;
     }
 
+    $updatedFields = [];
     foreach ($record as $field => $value) {
         $column = $columnMap[strtolower($field)] ?? null;
         if ($column == null) {
@@ -1368,16 +1388,22 @@ function updateUbsRecord($editor, $row, $record, $table_name)
 
         try {
             $row->set($field, $value);
+            $updatedFields[] = $field;
         } catch (\Throwable $e) {
             // Log the problematic field but continue
             ProgressDisplay::warning("Skipping field '$field' in $table_name: " . $e->getMessage());
         }
     }
+    
+    // ✅ DEBUG: Log what fields were updated
+    if (!empty($updatedFields)) {
+        ProgressDisplay::info("🔍 DEBUG: Updated " . count($updatedFields) . " field(s) in $table_name: " . implode(', ', array_slice($updatedFields, 0, 10)) . (count($updatedFields) > 10 ? '...' : ''));
+    }
 
     $editor->writeRecord();
 }
 
-function insertUbsRecord($editor, $record, $table_name)
+function insertUbsRecord($editor, $record, $table_name, $full_table_name = null, $primaryKey = null)
 {
     $columns = $editor->getColumns();
     $columnMap = [];
@@ -1394,22 +1420,54 @@ function insertUbsRecord($editor, $record, $table_name)
 
     $newRow = $editor->appendRecord();
     
-    // ✅ DEBUG: Log primary key field for validation
-    $primaryKey = Converter::primaryKey($table_name);
-    $primaryKeyUpper = is_array($primaryKey) ? array_map('strtoupper', $primaryKey) : strtoupper($primaryKey);
+    // ✅ FIX: Use provided primary key or get it from converter using full table name
+    if ($primaryKey === null) {
+        if ($full_table_name !== null) {
+            $primaryKey = Converter::primaryKey($full_table_name);
+        } else {
+            $primaryKey = Converter::primaryKey($table_name);
+        }
+    }
+    
+    if (empty($primaryKey)) {
+        throw new Exception("Cannot insert record into $table_name: Primary key not defined in Converter. Full table: " . ($full_table_name ?? $table_name) . ". Record keys: " . implode(', ', array_keys($record)));
+    }
+    
+    // Try multiple ways to get the primary key value (handle case variations)
     $primaryKeyValue = null;
     if (is_array($primaryKey)) {
         $primaryKeyValue = [];
         foreach ($primaryKey as $key) {
-            $primaryKeyValue[] = $record[strtoupper($key)] ?? $record[$key] ?? null;
+            // Try uppercase, lowercase, and original case
+            $value = $record[strtoupper($key)] ?? $record[strtolower($key)] ?? $record[$key] ?? null;
+            $primaryKeyValue[] = $value;
         }
-        $primaryKeyValue = implode('|', $primaryKeyValue);
+        $primaryKeyValue = implode('|', array_filter($primaryKeyValue)); // Filter out nulls
     } else {
-        $primaryKeyValue = $record[strtoupper($primaryKey)] ?? $record[$primaryKey] ?? null;
+        // Try uppercase, lowercase, and original case
+        $primaryKeyValue = $record[strtoupper($primaryKey)] ?? $record[strtolower($primaryKey)] ?? $record[$primaryKey] ?? null;
+        
+        // Also try trimming whitespace
+        if (is_string($primaryKeyValue)) {
+            $primaryKeyValue = trim($primaryKeyValue);
+        }
     }
     
     if (empty($primaryKeyValue)) {
-        throw new Exception("Cannot insert record into $table_name: Primary key field '$primaryKey' is empty or missing. Record keys: " . implode(', ', array_keys($record)));
+        // Show all possible variations we tried
+        $triedKeys = [];
+        if (is_array($primaryKey)) {
+            foreach ($primaryKey as $key) {
+                $triedKeys[] = strtoupper($key);
+                $triedKeys[] = strtolower($key);
+                $triedKeys[] = $key;
+            }
+        } else {
+            $triedKeys[] = strtoupper($primaryKey);
+            $triedKeys[] = strtolower($primaryKey);
+            $triedKeys[] = $primaryKey;
+        }
+        throw new Exception("Cannot insert record into $table_name: Primary key field '$primaryKey' is empty or missing. Tried keys: " . implode(', ', array_unique($triedKeys)) . ". Record keys: " . implode(', ', array_keys($record)) . ". Record CUSTNO value: " . ($record['CUSTNO'] ?? $record['custno'] ?? 'NOT FOUND'));
     }
 
     foreach ($record as $field => $value) {
