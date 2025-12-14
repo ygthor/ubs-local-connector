@@ -707,8 +707,16 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                             'editMode' => $editMode,
                         ]);
 
+                        $insertedCount = 0;
                         foreach ($batch as $record) {
-                            insertUbsRecord($batchEditor, $record, $table_name);
+                            try {
+                                insertUbsRecord($batchEditor, $record, $table_name);
+                                $insertedCount++;
+                            } catch (\Throwable $insertError) {
+                                ProgressDisplay::error("❌ Failed to insert record into $table_name: " . $insertError->getMessage());
+                                ProgressDisplay::error("Record data: " . json_encode($record, JSON_PARTIAL_OUTPUT_ON_ERROR));
+                                throw $insertError; // Re-throw to trigger retry logic
+                            }
                         }
 
                         if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
@@ -720,6 +728,8 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                             }
                         }
                         $batchEditor->close();
+                        
+                        ProgressDisplay::info("✅ Successfully inserted $insertedCount record(s) into $table_name DBF file");
                         break; // Success
                     } catch (\Throwable $e) {
                         $retryCount++;
@@ -1383,6 +1393,24 @@ function insertUbsRecord($editor, $record, $table_name)
     }
 
     $newRow = $editor->appendRecord();
+    
+    // ✅ DEBUG: Log primary key field for validation
+    $primaryKey = Converter::primaryKey($table_name);
+    $primaryKeyUpper = is_array($primaryKey) ? array_map('strtoupper', $primaryKey) : strtoupper($primaryKey);
+    $primaryKeyValue = null;
+    if (is_array($primaryKey)) {
+        $primaryKeyValue = [];
+        foreach ($primaryKey as $key) {
+            $primaryKeyValue[] = $record[strtoupper($key)] ?? $record[$key] ?? null;
+        }
+        $primaryKeyValue = implode('|', $primaryKeyValue);
+    } else {
+        $primaryKeyValue = $record[strtoupper($primaryKey)] ?? $record[$primaryKey] ?? null;
+    }
+    
+    if (empty($primaryKeyValue)) {
+        throw new Exception("Cannot insert record into $table_name: Primary key field '$primaryKey' is empty or missing. Record keys: " . implode(', ', array_keys($record)));
+    }
 
     foreach ($record as $field => $value) {
         $fieldUpper = strtoupper($field);
@@ -1455,7 +1483,17 @@ function insertUbsRecord($editor, $record, $table_name)
         }
     }
 
-    $editor->writeRecord();
+    // ✅ FIX: Write the record explicitly - ensure the appended record is written
+    try {
+        $editor->writeRecord($newRow);
+    } catch (\Throwable $e) {
+        // If writeRecord with argument fails, try without (some XBase versions)
+        try {
+            $editor->writeRecord();
+        } catch (\Throwable $e2) {
+            throw new Exception("Failed to write record to $table_name DBF file: " . $e->getMessage() . " / " . $e2->getMessage());
+        }
+    }
 }
 
 function insertSyncLog()

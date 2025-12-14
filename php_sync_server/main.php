@@ -297,6 +297,14 @@ try {
                             $ubs_data_to_upsert = $comparedData['ubs_data'];
                             
                             if (!empty($ubs_data_to_upsert)) {
+                                // ✅ DEBUG: Log first record to see what data is being synced
+                                $firstRecord = $ubs_data_to_upsert[0];
+                                $primaryKey = Converter::primaryKey($ubs_table);
+                                $primaryKeyValue = is_array($primaryKey) ? 
+                                    implode('|', array_map(function($k) use ($firstRecord) { return $firstRecord[strtoupper($k)] ?? $firstRecord[$k] ?? ''; }, $primaryKey)) :
+                                    ($firstRecord[strtoupper($primaryKey)] ?? $firstRecord[$primaryKey] ?? '');
+                                ProgressDisplay::info("🔍 DEBUG: First record to sync - Primary key ($primaryKey): '$primaryKeyValue', Available fields: " . implode(', ', array_keys($firstRecord)));
+                                
                                 executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert) {
                                     ProgressDisplay::info("⬇️ $ubs_table: Syncing " . count($ubs_data_to_upsert) . " missing remote→UBS");
                                     batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
