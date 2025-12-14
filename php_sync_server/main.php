@@ -143,6 +143,15 @@ try {
                     
                     if ($isForceSync) {
                         $countSql = "SELECT COUNT(*) as total FROM $remote_table_name";
+                    } elseif ($isArtran) {
+                        // For artran (orders): Check both updated_at AND order_date to catch recent orders
+                        $countSql = "SELECT COUNT(*) as total FROM $remote_table_name 
+                                    WHERE ($column_updated_at > '$last_synced_at' OR order_date > '$last_synced_at')";
+                    } elseif ($isIctran) {
+                        // For ictran (order_items): Check both updated_at AND parent order's order_date
+                        $countSql = "SELECT COUNT(*) as total FROM $remote_table_name oi
+                                    INNER JOIN orders o ON oi.reference_no = o.reference_no
+                                    WHERE (oi.$column_updated_at > '$last_synced_at' OR o.order_date > '$last_synced_at')";
                     } else {
                         $countSql = "SELECT COUNT(*) as total FROM $remote_table_name WHERE $column_updated_at > '$last_synced_at'";
                     }
@@ -203,7 +212,19 @@ try {
                     $db_remote_all = new mysql();
                     $db_remote_all->connect_remote();
                     $remote_table_name = Converter::table_convert_remote($ubs_table);
-                    $allRemoteSql = "SELECT * FROM $remote_table_name";
+                    $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
+                    
+                    // For artran/ictran: Also check order_date to catch recent orders
+                    if ($isArtran) {
+                        $allRemoteSql = "SELECT * FROM $remote_table_name 
+                                        WHERE ($column_updated_at > '$last_synced_at' OR order_date > '$last_synced_at')";
+                    } elseif ($isIctran) {
+                        $allRemoteSql = "SELECT oi.* FROM $remote_table_name oi
+                                       INNER JOIN orders o ON oi.reference_no = o.reference_no
+                                       WHERE (oi.$column_updated_at > '$last_synced_at' OR o.order_date > '$last_synced_at')";
+                    } else {
+                        $allRemoteSql = "SELECT * FROM $remote_table_name WHERE $column_updated_at > '$last_synced_at'";
+                    }
                     $allRemoteData = $db_remote_all->get($allRemoteSql);
                     $db_remote_all->close();
                     
@@ -318,8 +339,9 @@ try {
                 // Fetch only matching remote records for this chunk
                 $chunk_remote_data = [];
                 if (!empty($chunk_keys)) {
-                    $updatedAfter = ($isForceSync || $isForceSyncWithDate) ? null : $last_synced_at;
-                    $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, $updatedAfter, $isForceSyncWithDate ? $minOrderDate : null);
+                    $updatedAfter = $isForceSync ? null : $last_synced_at;
+                    // For artran/ictran, also check order_date (handled in fetchRemoteDataByKeys)
+                    $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, $updatedAfter);
                 }
                 
                 // ✅ FAST PATH: If no remote data, skip syncEntity (like main_init.php)
@@ -378,6 +400,90 @@ try {
             // Additional safety check: if we've processed more records than exist, break
             if ($processedRecords >= $ubsCount) {
                 // All records processed, break silently
+            }
+            
+            // ✅ For artran/ictran: Also check for missing remote records (Remote → UBS)
+            // This ensures orders created in remote but not yet in UBS are synced
+            if ($needsSpecialHandling && $ubsCount > 0) {
+                try {
+                    $db_remote_check = new mysql();
+                    $db_remote_check->connect_remote();
+                    $remote_table_name = Converter::table_convert_remote($ubs_table);
+                    $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
+                    
+                    // Fetch remote records that should be synced (check both updated_at and order_date)
+                    if ($isArtran) {
+                        $missingRemoteSql = "SELECT * FROM $remote_table_name 
+                                           WHERE ($column_updated_at > '$last_synced_at' OR order_date > '$last_synced_at')";
+                    } elseif ($isIctran) {
+                        $missingRemoteSql = "SELECT oi.* FROM $remote_table_name oi
+                                           INNER JOIN orders o ON oi.reference_no = o.reference_no
+                                           WHERE (oi.$column_updated_at > '$last_synced_at' OR o.order_date > '$last_synced_at')";
+                    } else {
+                        $missingRemoteSql = "SELECT * FROM $remote_table_name WHERE $column_updated_at > '$last_synced_at'";
+                    }
+                    
+                    $allRemoteData = $db_remote_check->get($missingRemoteSql);
+                    $db_remote_check->close();
+                    
+                    if (!empty($allRemoteData)) {
+                        // Get all local UBS keys
+                        $allUbsKeys = [];
+                        $ubs_key = Converter::primaryKey($ubs_table);
+                        $is_composite_key = is_array($ubs_key);
+                        
+                        if ($is_composite_key) {
+                            $keyColumns = array_map(function($k) { return "`$k`"; }, $ubs_key);
+                            $keySql = "SELECT " . implode(', ', $keyColumns) . " FROM `$ubs_table`";
+                        } else {
+                            $keySql = "SELECT `$ubs_key` FROM `$ubs_table`";
+                        }
+                        
+                        $allUbsKeysData = $db->get($keySql);
+                        foreach ($allUbsKeysData as $row) {
+                            if ($is_composite_key) {
+                                $composite_keys = [];
+                                foreach ($ubs_key as $k) {
+                                    $composite_keys[] = $row[$k] ?? '';
+                                }
+                                $key = implode('|', $composite_keys);
+                            } else {
+                                $key = $row[$ubs_key] ?? '';
+                            }
+                            if (!empty($key)) {
+                                $allUbsKeys[$key] = true;
+                            }
+                        }
+                        unset($allUbsKeysData);
+                        
+                        // Find missing records (in remote but not in UBS)
+                        $remote_key = Converter::primaryKey($remote_table_name);
+                        $missing_records = [];
+                        foreach ($allRemoteData as $remote_row) {
+                            $remoteKey = $remote_row[$remote_key] ?? '';
+                            if (!empty($remoteKey) && !isset($allUbsKeys[$remoteKey])) {
+                                $missing_records[] = $remote_row;
+                            }
+                        }
+                        
+                        if (!empty($missing_records)) {
+                            $comparedData = syncEntity($ubs_table, [], $missing_records);
+                            $ubs_data_to_upsert = $comparedData['ubs_data'];
+                            
+                            if (!empty($ubs_data_to_upsert)) {
+                                executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert) {
+                                    $tableLabel = $isArtran ? 'orders' : 'order_items';
+                                    ProgressDisplay::info("⬇️ " . ucfirst($tableLabel) . ": Syncing " . count($ubs_data_to_upsert) . " missing remote→UBS record(s)");
+                                    batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
+                                }, true);
+                            }
+                        }
+                        
+                        unset($allUbsKeys, $missing_records, $allRemoteData);
+                    }
+                } catch (Exception $e) {
+                    ProgressDisplay::warning("⚠️  $ubs_table: Error checking for missing remote records: " . $e->getMessage());
+                }
             }
             
             // ✅ OPTIMIZATION: Skip remote-only sync when UBS is empty
