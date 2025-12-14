@@ -342,70 +342,97 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
     // Track REFNOs for artran recalculation (only for ictran table)
     $refNosToRecalculate = [];
 
+    // ✅ Initialize lock variable for cleanup
+    $lockFp = null;
+    $backupPath = null;
+
     ProgressDisplay::info("Starting batch upsert for UBS $table_name ($totalRecords records)");
 
-    // ✅ Get primary key field name(s) for validation
-    $primaryKeyField = is_array($keyField) ? $keyField : [$keyField];
-
-    // Check if file exists and is accessible
-    if (!file_exists($path)) {
-        throw new Exception("DBF file not found: $path");
-    }
-
-    if (!is_readable($path)) {
-        throw new Exception("DBF file is not readable: $path");
-    }
-
-    // Try to detect and repair corruption before processing
     try {
-        $testReader = new \XBase\TableReader($path);
-        $testReader->close();
-    } catch (\Throwable $e) {
-        $errorMsg = strtolower($e->getMessage());
-        if (
-            strpos($errorMsg, 'clone') !== false ||
-            strpos($errorMsg, 'corrupt') !== false ||
-            strpos($errorMsg, 'length') !== false ||
-            strpos($errorMsg, 'invalid') !== false ||
-            strpos($errorMsg, 'bytes') !== false
-        ) {
-            ProgressDisplay::warning("Possible DBF corruption detected for $table_name: " . $e->getMessage());
-            ProgressDisplay::info("Attempting automatic repair...");
+        // ✅ SAFETY CHECK 1: Check if UBS software is running
+        if (isUbsRunning()) {
+            throw new Exception("❌ UBS software is currently running! Please close UBS before syncing to prevent DBF corruption.");
+        }
 
-            // Load repair function if not already loaded
-            if (!function_exists('repairDbfFile')) {
-                $repairScript = __DIR__ . '/repair_dbf.php';
-                if (file_exists($repairScript)) {
-                    require_once $repairScript;
+        // ✅ Get primary key field name(s) for validation
+        $primaryKeyField = is_array($keyField) ? $keyField : [$keyField];
+
+        // Check if file exists and is accessible
+        if (!file_exists($path)) {
+            throw new Exception("DBF file not found: $path");
+        }
+
+        if (!is_readable($path)) {
+            throw new Exception("DBF file is not readable: $path");
+        }
+
+        // ✅ SAFETY CHECK 2: Check if DBF file is locked/in use
+        if (isDbfFileLocked($path)) {
+            throw new Exception("❌ DBF file is currently locked or in use: $table_name. Another process may be accessing it. Please wait and try again.");
+        }
+
+        // ✅ SAFETY CHECK 3: Create backup before writing
+        $backupPath = backupDbfFile($path);
+        if ($backupPath === false) {
+            ProgressDisplay::warning("⚠️  Could not create backup, but continuing anyway...");
+        }
+
+        // ✅ SAFETY CHECK 4: Acquire file lock
+        $lockFp = acquireDbfLock($path);
+        if ($lockFp === false) {
+            throw new Exception("❌ Cannot acquire exclusive lock on DBF file: $table_name. File may be in use.");
+        }
+
+        // Try to detect and repair corruption before processing
+        try {
+            $testReader = new \XBase\TableReader($path);
+            $testReader->close();
+        } catch (\Throwable $e) {
+            $errorMsg = strtolower($e->getMessage());
+            if (
+                strpos($errorMsg, 'clone') !== false ||
+                strpos($errorMsg, 'corrupt') !== false ||
+                strpos($errorMsg, 'length') !== false ||
+                strpos($errorMsg, 'invalid') !== false ||
+                strpos($errorMsg, 'bytes') !== false
+            ) {
+                ProgressDisplay::warning("Possible DBF corruption detected for $table_name: " . $e->getMessage());
+                ProgressDisplay::info("Attempting automatic repair...");
+
+                // Load repair function if not already loaded
+                if (!function_exists('repairDbfFile')) {
+                    $repairScript = __DIR__ . '/repair_dbf.php';
+                    if (file_exists($repairScript)) {
+                        require_once $repairScript;
+                    }
                 }
-            }
 
-            if (function_exists('attemptDbfRepair') && attemptDbfRepair($path)) {
-                ProgressDisplay::info("DBF file repaired successfully, retrying...");
-                // Retry opening the file
-                try {
-                    $testReader = new \XBase\TableReader($path);
-                    $testReader->close();
-                } catch (\Throwable $retryError) {
-                    ProgressDisplay::error("File still corrupted after repair attempt");
-                    throw new Exception("DBF file appears corrupted and repair failed. Please run manually: php repair_dbf.php \"$path\"");
+                if (function_exists('attemptDbfRepair') && attemptDbfRepair($path)) {
+                    ProgressDisplay::info("DBF file repaired successfully, retrying...");
+                    // Retry opening the file
+                    try {
+                        $testReader = new \XBase\TableReader($path);
+                        $testReader->close();
+                    } catch (\Throwable $retryError) {
+                        ProgressDisplay::error("File still corrupted after repair attempt");
+                        throw new Exception("DBF file appears corrupted and repair failed. Please run manually: php repair_dbf.php \"$path\"");
+                    }
+                } else {
+                    ProgressDisplay::error("Failed to repair DBF file automatically");
+                    ProgressDisplay::error("Please run manually: php repair_dbf.php \"$path\"");
+                    throw new Exception("DBF file appears corrupted. Please repair it first: " . $e->getMessage());
                 }
             } else {
-                ProgressDisplay::error("Failed to repair DBF file automatically");
-                ProgressDisplay::error("Please run manually: php repair_dbf.php \"$path\"");
-                throw new Exception("DBF file appears corrupted. Please repair it first: " . $e->getMessage());
+                // Re-throw if it's not a corruption-related error
+                throw $e;
             }
-        } else {
-            // Re-throw if it's not a corruption-related error
-            throw $e;
         }
-    }
 
     // Group records by operation type for better performance
     $updateRecords = [];
     $insertRecords = [];
 
-    // Try to open with clone mode first, fallback to realtime if clone fails
+    // ✅ SAFETY: Always use CLONE mode (never REALTIME) to prevent corruption
     $editMode = \XBase\TableEditor::EDIT_MODE_CLONE;
     $editor = null;
     $maxRetries = 3;
@@ -420,15 +447,10 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         } catch (\Throwable $e) {
             $retryCount++;
             if ($retryCount >= $maxRetries) {
-                // If clone mode fails, try realtime mode as fallback
-                if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
-                    ProgressDisplay::warning("Clone mode failed for $table_name, trying realtime mode: " . $e->getMessage());
-                    $editMode = \XBase\TableEditor::EDIT_MODE_REALTIME;
-                    $retryCount = 0; // Reset retry count for realtime mode
-                    continue;
-                } else {
-                    throw new Exception("Failed to open DBF file after $maxRetries retries: " . $e->getMessage());
-                }
+                // ✅ REMOVED REALTIME FALLBACK - Always abort if CLONE fails
+                // This prevents direct writes that could corrupt the file
+                releaseDbfLock($lockFp);
+                throw new Exception("❌ Failed to open DBF file in CLONE mode after $maxRetries retries. UBS may be running or file is corrupted. Error: " . $e->getMessage());
             }
             // Wait a bit before retry (exponential backoff)
             usleep(100000 * $retryCount); // 0.1s, 0.2s, 0.3s
@@ -520,6 +542,11 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
 
                     if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
                         $batchEditor->save();
+                        
+                        // ✅ Validate file after save
+                        if (!validateDbfFile($path)) {
+                            throw new Exception("DBF file validation failed after save. File may be corrupted.");
+                        }
                     }
                     $batchEditor->close();
                     break; // Success
@@ -534,14 +561,9 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                     }
 
                     if ($retryCount >= $maxRetries) {
-                        if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
-                            ProgressDisplay::warning("Clone mode failed, trying realtime mode for batch update");
-                            $editMode = \XBase\TableEditor::EDIT_MODE_REALTIME;
-                            $retryCount = 0;
-                            continue;
-                        } else {
-                            throw new Exception("Failed to update batch in $table_name: " . $e->getMessage());
-                        }
+                        // ✅ REMOVED REALTIME FALLBACK - Always abort if CLONE fails
+                        releaseDbfLock($lockFp);
+                        throw new Exception("❌ Failed to update batch in $table_name after $maxRetries retries: " . $e->getMessage());
                     }
                     usleep(100000 * $retryCount); // Exponential backoff
                 }
@@ -625,6 +647,11 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
 
                         if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
                             $batchEditor->save();
+                            
+                            // ✅ Validate file after save
+                            if (!validateDbfFile($path)) {
+                                throw new Exception("DBF file validation failed after save. File may be corrupted.");
+                            }
                         }
                         $batchEditor->close();
                         break; // Success
@@ -639,14 +666,9 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                         }
 
                         if ($retryCount >= $maxRetries) {
-                            if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
-                                ProgressDisplay::warning("Clone mode failed, trying realtime mode for batch insert");
-                                $editMode = \XBase\TableEditor::EDIT_MODE_REALTIME;
-                                $retryCount = 0;
-                                continue;
-                            } else {
-                                throw new Exception("Failed to insert batch in $table_name: " . $e->getMessage());
-                            }
+                            // ✅ REMOVED REALTIME FALLBACK - Always abort if CLONE fails
+                            releaseDbfLock($lockFp);
+                            throw new Exception("❌ Failed to insert batch in $table_name after $maxRetries retries: " . $e->getMessage());
                         }
                         usleep(100000 * $retryCount); // Exponential backoff
                     }
@@ -871,11 +893,31 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
         ProgressDisplay::error("❌ Stack trace: " . $e->getTraceAsString());
     }
 
-    ProgressDisplay::info("Completed batch upsert for UBS $table_name");
+        ProgressDisplay::info("Completed batch upsert for UBS $table_name");
 
-    // ✅ Recalculate artran totals when ictran records are inserted/updated
-    if ($table === 'ubs_ubsstk2015_ictran' && !empty($refNosToRecalculate)) {
-        recalculateArtranTotals($refNosToRecalculate);
+        // ✅ Recalculate artran totals when ictran records are inserted/updated
+        if ($table === 'ubs_ubsstk2015_ictran' && !empty($refNosToRecalculate)) {
+            recalculateArtranTotals($refNosToRecalculate);
+        }
+
+    } catch (\Throwable $e) {
+        // ✅ If error occurred and we have a backup, restore it
+        if ($backupPath !== null && file_exists($backupPath)) {
+            ProgressDisplay::warning("⚠️  Error occurred during DBF write. Attempting to restore from backup...");
+            try {
+                copy($backupPath, $path);
+                ProgressDisplay::info("✅ DBF file restored from backup");
+            } catch (\Throwable $restoreError) {
+                ProgressDisplay::error("❌ Failed to restore DBF file from backup: " . $restoreError->getMessage());
+            }
+        }
+        // Re-throw the exception
+        throw $e;
+    } finally {
+        // ✅ Always release lock, even if error occurred
+        if ($lockFp !== null) {
+            releaseDbfLock($lockFp);
+        }
     }
 }
 

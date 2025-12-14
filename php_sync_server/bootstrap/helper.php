@@ -536,3 +536,181 @@ function validateAndFixUpdatedOn($data, $table = null) {
     
     return $data;
 }
+
+/**
+ * Check if UBS software is currently running
+ * @return bool True if UBS is running, false otherwise
+ */
+function isUbsRunning() {
+    if (PHP_OS_FAMILY !== 'Windows') {
+        // UBS is Windows-only software
+        return false;
+    }
+    
+    // Common UBS process names
+    $ubsProcesses = [
+        'UBS.exe',
+        'UBSSTK.exe',
+        'UBSSTK2015.exe',
+        'UBSSTK*.exe',
+        'UBS*.exe'
+    ];
+    
+    foreach ($ubsProcesses as $process) {
+        $output = [];
+        $command = "tasklist /FI \"IMAGENAME eq $process\" 2>NUL";
+        exec($command, $output, $returnCode);
+        
+        // If output has more than just the header, process is running
+        if (count($output) > 1) {
+            return true;
+        }
+    }
+    
+    // Also check for processes containing "UBS" in the name
+    $output = [];
+    exec("tasklist /FI \"IMAGENAME eq UBS*.exe\" 2>NUL", $output);
+    if (count($output) > 1) {
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * Check if a DBF file is currently locked/in use
+ * @param string $path Path to DBF file
+ * @return bool True if file is locked, false otherwise
+ */
+function isDbfFileLocked($path) {
+    if (!file_exists($path)) {
+        return false;
+    }
+    
+    // Try to open file in read-write mode to check if it's locked
+    $fp = @fopen($path, 'r+');
+    if ($fp === false) {
+        // File might be locked or doesn't exist
+        return true;
+    }
+    
+    // Try to acquire a shared lock (non-blocking)
+    $locked = @flock($fp, LOCK_EX | LOCK_NB, $wouldblock);
+    
+    if ($locked) {
+        // We got the lock, release it immediately
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        return false; // File is not locked
+    } else {
+        fclose($fp);
+        return true; // File is locked or would block
+    }
+}
+
+/**
+ * Create a backup of DBF file before writing
+ * @param string $path Path to DBF file
+ * @return string|false Backup file path on success, false on failure
+ */
+function backupDbfFile($path) {
+    if (!file_exists($path)) {
+        ProgressDisplay::warning("Cannot backup: File does not exist: $path");
+        return false;
+    }
+    
+    // Create backup directory if it doesn't exist
+    $backupDir = dirname($path) . '/.backups';
+    if (!is_dir($backupDir)) {
+        if (!@mkdir($backupDir, 0755, true)) {
+            ProgressDisplay::warning("Cannot create backup directory: $backupDir");
+            return false;
+        }
+    }
+    
+    // Generate backup filename with timestamp
+    $timestamp = date('YmdHis');
+    $basename = basename($path, '.dbf');
+    $backupPath = $backupDir . '/' . $basename . '_' . $timestamp . '.dbf';
+    
+    // Copy the file
+    if (!@copy($path, $backupPath)) {
+        ProgressDisplay::warning("Failed to create backup: $path -> $backupPath");
+        return false;
+    }
+    
+    // Also backup associated files (.fpt, .cdx if they exist)
+    $extensions = ['.fpt', '.cdx', '.idx'];
+    foreach ($extensions as $ext) {
+        $sourceFile = dirname($path) . '/' . basename($path, '.dbf') . $ext;
+        if (file_exists($sourceFile)) {
+            $backupFile = $backupDir . '/' . $basename . '_' . $timestamp . $ext;
+            @copy($sourceFile, $backupFile);
+        }
+    }
+    
+    ProgressDisplay::info("✅ Backup created: " . basename($backupPath));
+    return $backupPath;
+}
+
+/**
+ * Acquire exclusive lock on DBF file
+ * @param string $path Path to DBF file
+ * @return resource|false File pointer on success, false on failure
+ */
+function acquireDbfLock($path) {
+    $lockFile = $path . '.lock';
+    $fp = @fopen($lockFile, 'w');
+    
+    if (!$fp) {
+        ProgressDisplay::warning("Cannot create lock file: $lockFile");
+        return false;
+    }
+    
+    // Try to acquire exclusive lock (non-blocking)
+    $locked = @flock($fp, LOCK_EX | LOCK_NB, $wouldblock);
+    
+    if (!$locked) {
+        fclose($fp);
+        if ($wouldblock) {
+            ProgressDisplay::warning("DBF file is locked by another process: " . basename($path));
+        } else {
+            ProgressDisplay::warning("Cannot acquire lock on: " . basename($path));
+        }
+        return false;
+    }
+    
+    return $fp; // Return file pointer to maintain lock
+}
+
+/**
+ * Release lock on DBF file
+ * @param resource $fp File pointer from acquireDbfLock()
+ * @return void
+ */
+function releaseDbfLock($fp) {
+    if ($fp && is_resource($fp)) {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
+}
+
+/**
+ * Validate DBF file integrity after write
+ * @param string $path Path to DBF file
+ * @return bool True if file is valid, false otherwise
+ */
+function validateDbfFile($path) {
+    if (!file_exists($path)) {
+        return false;
+    }
+    
+    try {
+        $testReader = new \XBase\TableReader($path);
+        $testReader->close();
+        return true;
+    } catch (\Throwable $e) {
+        ProgressDisplay::warning("DBF validation failed: " . $e->getMessage());
+        return false;
+    }
+}
