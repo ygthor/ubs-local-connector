@@ -506,12 +506,15 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
 
     // Process updates in batches
     if (!empty($updateRecords)) {
-        ProgressDisplay::info("Processing " . count($updateRecords) . " updates for $table_name");
+        $totalUpdates = count($updateRecords);
+        ProgressDisplay::info("Processing $totalUpdates updates for $table_name");
 
         for ($i = 0; $i < count($updateRecords); $i += $batchSize) {
             $batch = array_slice($updateRecords, $i, $batchSize);
             $batchEditor = null;
             $retryCount = 0;
+            $batchNum = (int)($i / $batchSize) + 1;
+            $totalBatches = (int)ceil($totalUpdates / $batchSize);
 
             while ($retryCount < $maxRetries) {
                 try {
@@ -519,12 +522,49 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                         'editMode' => $editMode,
                     ]);
 
+                    // Build index of record keys to positions for faster lookup
+                    $recordPositions = [];
+                    $batchEditor->moveTo(0);
+                    $position = 0;
+                    while ($row = $batchEditor->nextRecord()) {
+                        $rowKey = getRecordKey($row, $keyField);
+                        if (!isset($recordPositions[$rowKey])) {
+                            $recordPositions[$rowKey] = $position;
+                        }
+                        $position++;
+                    }
+
                     // Need to find the records again since we're opening a new editor
+                    $batchIndex = 0;
                     foreach ($batch as $item) {
+                        $batchIndex++;
                         $key = $item['key'];
                         $record = $item['record'];
 
-                        // Find the record in the editor
+                        // Show progress every 5 records or at the end
+                        if ($batchIndex % 5 == 0 || $batchIndex == count($batch)) {
+                            ProgressDisplay::info("  ⏳ Updating $batchIndex/" . count($batch) . " in batch $batchNum/$totalBatches...");
+                        }
+
+                        // Use position index for faster lookup if available
+                        if (isset($recordPositions[$key])) {
+                            // Try to move directly to position (may not work with all XBase versions)
+                            try {
+                                $batchEditor->moveTo($recordPositions[$key]);
+                                $row = $batchEditor->nextRecord();
+                                if ($row) {
+                                    $rowKey = getRecordKey($row, $keyField);
+                                    if ($rowKey === $key) {
+                                        updateUbsRecord($batchEditor, $row, $record, $table_name);
+                                        continue; // Success, move to next
+                                    }
+                                }
+                            } catch (\Throwable $e) {
+                                // Position lookup failed, fall back to scan
+                            }
+                        }
+
+                        // Fallback: Scan from beginning (slower but reliable)
                         $batchEditor->moveTo(0);
                         $found = false;
                         while ($row = $batchEditor->nextRecord()) {
@@ -539,6 +579,8 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                             ProgressDisplay::warning("Record with key '$key' not found for update in $table_name");
                         }
                     }
+                    
+                    ProgressDisplay::info("  ✅ Completed batch $batchNum/$totalBatches ($totalUpdates total updates)");
 
                     if ($editMode === \XBase\TableEditor::EDIT_MODE_CLONE) {
                         $batchEditor->save();
