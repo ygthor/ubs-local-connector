@@ -133,8 +133,12 @@ try {
             $isIctran = ($ubs_table === 'ubs_ubsstk2015_ictran');
             $needsSpecialHandling = ($isArtran || $isIctran);
             
-            // Only check remote count if we have UBS data to compare, OR if it's artran/ictran (always check for orders/order_items)
-            if ($ubsCount > 0 || $needsSpecialHandling) {
+            // Check if this is customers table - needs special handling when UBS is empty
+            $isCustomers = ($ubs_table === 'ubs_ubsacc2015_arcust');
+            $needsEmptyUbsCheck = ($needsSpecialHandling || $isCustomers);
+            
+            // Only check remote count if we have UBS data to compare, OR if it's artran/ictran/customers (always check when UBS is empty)
+            if ($ubsCount > 0 || $needsEmptyUbsCheck) {
                 try {
                     $db_remote_check = new mysql();
                     $db_remote_check->connect_remote();
@@ -157,13 +161,23 @@ try {
                     }
                     $remoteCount = $db_remote_check->first($countSql)['total'] ?? 0;
                     
-                    // For artran/ictran, also check total count if no recent updates
-                    if ($needsSpecialHandling && $remoteCount == 0) {
+                    // For artran/ictran/customers, also check total count if no recent updates (when UBS is empty)
+                    if ($needsEmptyUbsCheck && $ubsCount == 0 && $remoteCount == 0) {
                         $totalRemoteSql = "SELECT COUNT(*) as total FROM $remote_table_name";
                         $totalRemoteCount = $db_remote_check->first($totalRemoteSql)['total'] ?? 0;
                         if ($totalRemoteCount > 0) {
-                            $tableLabel = $isArtran ? 'orders' : 'order_items';
+                            if ($isArtran) {
+                                $tableLabel = 'orders';
+                            } elseif ($isIctran) {
+                                $tableLabel = 'order_items';
+                            } elseif ($isCustomers) {
+                                $tableLabel = 'customers';
+                            } else {
+                                $tableLabel = $remote_table_name;
+                            }
                             ProgressDisplay::info("📊 " . ucfirst($tableLabel) . ": $totalRemoteCount total records in remote (none updated recently)");
+                            // Set remoteCount to total so it doesn't get skipped
+                            $remoteCount = $totalRemoteCount;
                         }
                     }
                     
@@ -174,15 +188,23 @@ try {
             }
             
             // ✅ OPTIMIZED: If no data on either side, skip with concise message
-            // BUT: For artran (orders) and ictran (order_items), always check remote even if local is empty
-            if ($ubsCount == 0 && $remoteCount == 0 && !$needsSpecialHandling) {
+            // BUT: For artran (orders), ictran (order_items), and customers, always check remote even if local is empty
+            if ($ubsCount == 0 && $remoteCount == 0 && !$needsEmptyUbsCheck) {
                 ProgressDisplay::info("⏭️  SKIP $ubs_table (no data)");
                 continue;
             }
             
-            // Special handling for artran/ictran: Always check remote for missing records
-            if ($needsSpecialHandling && $ubsCount == 0) {
-                $tableLabel = $isArtran ? 'orders' : 'order_items';
+            // Special handling for artran/ictran/customers: Always check remote for missing records
+            if ($needsEmptyUbsCheck && $ubsCount == 0) {
+                if ($isArtran) {
+                    $tableLabel = 'orders';
+                } elseif ($isIctran) {
+                    $tableLabel = 'order_items';
+                } elseif ($isCustomers) {
+                    $tableLabel = 'customers';
+                } else {
+                    $tableLabel = $remote_table_name;
+                }
                 ProgressDisplay::info("🔍 " . ucfirst($tableLabel) . ": No local updates, checking remote for missing records...");
             }
             
@@ -214,6 +236,8 @@ try {
                     $remote_table_name = Converter::table_convert_remote($ubs_table);
                     $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
                     
+                    // ✅ FIX: When UBS is empty, fetch ALL remote records (not just recent ones)
+                    // This ensures customers with old updated_at values are still synced to DBF
                     // For artran/ictran: Also check order_date to catch recent orders
                     if ($isArtran) {
                         $allRemoteSql = "SELECT * FROM $remote_table_name 
@@ -223,7 +247,9 @@ try {
                                        INNER JOIN orders o ON oi.reference_no = o.reference_no
                                        WHERE (oi.$column_updated_at > '$last_synced_at' OR o.order_date > '$last_synced_at')";
                     } else {
-                        $allRemoteSql = "SELECT * FROM $remote_table_name WHERE $column_updated_at > '$last_synced_at'";
+                        // ✅ FIX: When UBS table is empty, fetch ALL remote records regardless of timestamp
+                        // This ensures all customers are synced to DBF even if they have old updated_at values
+                        $allRemoteSql = "SELECT * FROM $remote_table_name";
                     }
                     $allRemoteData = $db_remote_all->get($allRemoteSql);
                     $db_remote_all->close();
