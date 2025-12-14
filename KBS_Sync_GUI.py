@@ -560,7 +560,6 @@ class SyncGUI:
             popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
             
             # Also set startupinfo to hide window completely
-            import subprocess
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = subprocess.SW_HIDE
