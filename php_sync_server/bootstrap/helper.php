@@ -624,8 +624,8 @@ function backupDbfFile($path) {
         return false;
     }
     
-    // Create backup directory if it doesn't exist
-    $backupDir = dirname($path) . '/.backups';
+    // Create backup directory if it doesn't exist (unique name to avoid conflicts)
+    $backupDir = dirname($path) . '/.backup_ubs_local_connector';
     if (!is_dir($backupDir)) {
         if (!@mkdir($backupDir, 0755, true)) {
             ProgressDisplay::warning("Cannot create backup directory: $backupDir");
@@ -655,7 +655,100 @@ function backupDbfFile($path) {
     }
     
     ProgressDisplay::info("✅ Backup created: " . basename($backupPath));
+    
+    // Clean up old backups (older than 7 days)
+    cleanupOldBackups($backupDir);
+    
     return $backupPath;
+}
+
+/**
+ * Clean up backup files older than 7 days
+ * @param string $backupDir Directory containing backup files
+ */
+function cleanupOldBackups($backupDir) {
+    if (!is_dir($backupDir)) {
+        return;
+    }
+    
+    $daysToKeep = 7;
+    $cutoffTime = time() - ($daysToKeep * 24 * 60 * 60); // 7 days ago
+    $deletedCount = 0;
+    $deletedSize = 0;
+    
+    try {
+        $files = glob($backupDir . '/*');
+        if ($files === false) {
+            return;
+        }
+        
+        foreach ($files as $file) {
+            if (is_file($file)) {
+                $fileTime = filemtime($file);
+                if ($fileTime !== false && $fileTime < $cutoffTime) {
+                    $fileSize = filesize($file);
+                    if (@unlink($file)) {
+                        $deletedCount++;
+                        $deletedSize += $fileSize;
+                    }
+                }
+            }
+        }
+        
+        if ($deletedCount > 0) {
+            $deletedSizeMB = round($deletedSize / 1024 / 1024, 2);
+            ProgressDisplay::info("🧹 Cleaned up $deletedCount old backup file(s) (older than $daysToKeep days, freed {$deletedSizeMB}MB)");
+        }
+    } catch (\Throwable $e) {
+        // Silently fail - cleanup shouldn't break the main process
+        // ProgressDisplay::warning("Warning: Could not clean up old backups: " . $e->getMessage());
+    }
+}
+
+/**
+ * Clean up all backup directories (for all UBS databases)
+ * Called at the start of sync operations to clean old backups
+ */
+function cleanupAllOldBackups() {
+    try {
+        // Get all possible UBS database directories
+        $databases = ['UBSSTK2015', 'UBSACC2015']; // Add more if needed
+        $subpath = ENV::DBF_SUBPATH ?? 'DATA';
+        
+        $totalDeleted = 0;
+        $totalFreed = 0;
+        
+        foreach ($databases as $db) {
+            $backupDir = "C:/$db/$subpath/.backup_ubs_local_connector";
+            if (is_dir($backupDir)) {
+                $daysToKeep = 7;
+                $cutoffTime = time() - ($daysToKeep * 24 * 60 * 60);
+                
+                $files = glob($backupDir . '/*');
+                if ($files !== false) {
+                    foreach ($files as $file) {
+                        if (is_file($file)) {
+                            $fileTime = filemtime($file);
+                            if ($fileTime !== false && $fileTime < $cutoffTime) {
+                                $fileSize = filesize($file);
+                                if (@unlink($file)) {
+                                    $totalDeleted++;
+                                    $totalFreed += $fileSize;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if ($totalDeleted > 0) {
+            $freedMB = round($totalFreed / 1024 / 1024, 2);
+            ProgressDisplay::info("🧹 Cleaned up $totalDeleted old backup file(s) (older than 7 days, freed {$freedMB}MB)");
+        }
+    } catch (\Throwable $e) {
+        // Silently fail - cleanup shouldn't break the main process
+    }
 }
 
 /**

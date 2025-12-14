@@ -28,6 +28,11 @@ function initializeSyncEnvironment()
     //     dump("- Execution time limit: " . ini_get('max_execution_time'));
     //     dump("- Garbage collection: " . (ini_get('zend.enable_gc') ? 'Enabled' : 'Disabled'));
     // }
+    
+    // Clean up old backup files (older than 7 days) at the start of sync
+    if (function_exists('cleanupAllOldBackups')) {
+        cleanupAllOldBackups();
+    }
 }
 
 // Memory management functions
