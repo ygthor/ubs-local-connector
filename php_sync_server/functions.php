@@ -3470,13 +3470,14 @@ function validateAndCleanDuplicateOrders()
 
 /**
  * FORCE SYNC artran (orders) and ictran (order_items) with date filter
- * Always syncs ALL records with order_date >= 2025-12-12, regardless of:
+ * Always syncs ALL records with order_date >= minOrderDate (default: 2025-12-01), regardless of:
  * - updated_at timestamps
  * - sync logs
  * - existing records
+ * - Skips all DO type orders (DO normally only insert from UBS to server, not synced back)
  * This is a true force sync that will upsert everything matching the date filter
  */
-function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate = '2025-12-12')
+function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate = '2025-12-01')
 {
     $result = [
         'success' => false,
@@ -3513,9 +3514,10 @@ function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate 
             $artranTotalRows = 0;
         } else {
             // Force sync with date filter: Get all records with DATE >= minOrderDate
-            $artranCountSql = "SELECT COUNT(*) as total FROM `$ubs_artran_table` WHERE DATE >= '$minOrderDate'";
+            // Skip DO type orders (DO normally only insert from UBS to server, not synced back)
+            $artranCountSql = "SELECT COUNT(*) as total FROM `$ubs_artran_table` WHERE DATE >= '$minOrderDate' AND TYPE != 'DO'";
             $artranTotalRows = $db_local->first($artranCountSql)['total'] ?? 0;
-            ProgressDisplay::info("🔄 FORCE SYNC: Syncing artran records with DATE >= $minOrderDate");
+            ProgressDisplay::info("🔄 FORCE SYNC: Syncing artran records with DATE >= $minOrderDate (skipping DO type orders)");
         }
 
         ProgressDisplay::info("Total artran rows to process: $artranTotalRows");
@@ -3530,9 +3532,10 @@ function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate 
                 ProgressDisplay::info("📦 Fetching artran chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
 
                 // Fetch a chunk of data with date filter
+                // Skip DO type orders (DO normally only insert from UBS to server, not synced back)
                 $sql = "
                     SELECT * FROM `$ubs_artran_table`
-                    WHERE DATE >= '$minOrderDate'
+                    WHERE DATE >= '$minOrderDate' AND TYPE != 'DO'
                     ORDER BY DATE ASC, COALESCE(UPDATED_ON, '1970-01-01') ASC
                     LIMIT $chunkSize OFFSET $offset
                 ";
@@ -3546,10 +3549,11 @@ function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate 
                 $artran_ubs_data = validateAndFixUpdatedOn($artran_ubs_data, $ubs_artran_table);
 
                 // FORCE SYNC: Fetch ALL remote records with date filter (not just matching keys)
+                // Skip DO type orders (DO normally only insert from UBS to server, not synced back)
                 $artran_remote_data = [];
                 $db_remote_check = new mysql();
                 $db_remote_check->connect_remote();
-                $remoteSql = "SELECT * FROM `$remoteArtranTable` WHERE order_date >= '$minOrderDate'";
+                $remoteSql = "SELECT * FROM `$remoteArtranTable` WHERE order_date >= '$minOrderDate' AND order_type != 'DO'";
                 $artran_remote_data = $db_remote_check->get($remoteSql);
                 $db_remote_check->close();
 
@@ -3618,14 +3622,15 @@ function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate 
         } else {
             // Force sync with date filter: Get all records with DATE >= minOrderDate
             // For ictran, we need to join with orders to filter by order_date
+            // Skip ictran records that belong to DO type orders (DO normally only insert from UBS to server)
             $ictranCountSql = "
                 SELECT COUNT(*) as total 
                 FROM `$ubs_ictran_table` ictran
                 INNER JOIN `$ubs_artran_table` artran ON ictran.REFNO = artran.REFNO
-                WHERE artran.DATE >= '$minOrderDate'
+                WHERE artran.DATE >= '$minOrderDate' AND artran.TYPE != 'DO'
             ";
             $ictranTotalRows = $db_local->first($ictranCountSql)['total'] ?? 0;
-            ProgressDisplay::info("🔄 FORCE SYNC: Syncing ictran records with order_date >= $minOrderDate");
+            ProgressDisplay::info("🔄 FORCE SYNC: Syncing ictran records with order_date >= $minOrderDate (skipping DO type orders)");
         }
 
         ProgressDisplay::info("Total ictran rows to process: $ictranTotalRows");
@@ -3640,11 +3645,12 @@ function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate 
                 ProgressDisplay::info("📦 Fetching ictran chunk " . (($offset / $chunkSize) + 1) . " (offset: $offset)");
 
                 // Fetch a chunk of data with date filter (join with artran to filter by order_date)
+                // Skip ictran records that belong to DO type orders (DO normally only insert from UBS to server)
                 $sql = "
                     SELECT ictran.* 
                     FROM `$ubs_ictran_table` ictran
                     INNER JOIN `$ubs_artran_table` artran ON ictran.REFNO = artran.REFNO
-                    WHERE artran.DATE >= '$minOrderDate'
+                    WHERE artran.DATE >= '$minOrderDate' AND artran.TYPE != 'DO'
                     ORDER BY artran.DATE ASC, ictran.ITEMCOUNT ASC, COALESCE(ictran.UPDATED_ON, '1970-01-01') ASC
                     LIMIT $chunkSize OFFSET $offset
                 ";
@@ -3658,12 +3664,13 @@ function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate 
                 $ictran_ubs_data = validateAndFixUpdatedOn($ictran_ubs_data, $ubs_ictran_table);
 
                 // FORCE SYNC: Fetch ALL remote records with date filter (not just matching keys)
+                // Skip ictran records that belong to DO type orders (DO normally only insert from UBS to server)
                 $ictran_remote_data = [];
                 $db_remote_check = new mysql();
                 $db_remote_check->connect_remote();
                 $remoteSql = "SELECT oi.* FROM `$remoteIctranTable` oi 
                              INNER JOIN `$remoteArtranTable` o ON oi.reference_no = o.reference_no 
-                             WHERE o.order_date >= '$minOrderDate'";
+                             WHERE o.order_date >= '$minOrderDate' AND o.order_type != 'DO'";
                 $ictran_remote_data = $db_remote_check->get($remoteSql);
                 $db_remote_check->close();
 

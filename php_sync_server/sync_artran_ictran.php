@@ -7,7 +7,7 @@ include(__DIR__ . '/bootstrap/cache.php');
 
 // Initialize sync environment and progress display
 initializeSyncEnvironment();
-ProgressDisplay::start("🚀 Starting FORCE SYNC: artran & ictran (order_date >= 2025-12-12) - No sync log checks");
+ProgressDisplay::start("🚀 Starting FORCE SYNC: artran & ictran (order_date >= 2025-12-01, skipping DO orders) - No sync log checks");
 
 // Check if Python sync is running
 if (isSyncRunning('python')) {
@@ -27,8 +27,12 @@ register_shutdown_function(function() {
 });
 
 try {
-    // Minimum order date for sync
-    $minOrderDate = '2025-12-15';
+    // Minimum order date for sync (matches Python sync date filter: 2025-12-01)
+    // Skip records before this date for better performance
+    $minOrderDate = getenv('SKIP_BEFORE_DATE') ?: '2025-12-01'; // Default: 2025-12-01
+    
+    ProgressDisplay::info("📅 Date filtering: Syncing records with order_date >= $minOrderDate");
+    ProgressDisplay::info("⏭️  Skipping all DO type orders (DO normally only insert from UBS to server, not synced back)");
     
     // Use the reusable function
     $result = syncArtranAndIctran(null, null, $minOrderDate);
