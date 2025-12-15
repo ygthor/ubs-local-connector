@@ -299,14 +299,158 @@ def read_dbf_original(dbf_file_path):
                 "rows": []
             }
 
-def read_dbf(dbf_file_path, progress_callback=None):
+def should_skip_record_by_date(record_data, cutoff_date_str, date_field_names=None):
     """
-    Read DBF file using the dbf library for proper timestamp handling - ENHANCED VERSION
-    with progress reporting support
+    Check if a record should be skipped based on date field.
+    Returns True if record should be skipped (date is before cutoff), False otherwise.
+    
+    Args:
+        record_data: Dictionary of record field values
+        cutoff_date_str: Cutoff date in YYYYMMDD format (e.g., '20251201')
+        date_field_names: List of date field names to check in priority order. 
+                         If None, checks 'DATE' first, then other common date fields.
+    
+    Returns:
+        True if record should be skipped, False if it should be kept
+    """
+    if cutoff_date_str is None:
+        return False
+    
+    if date_field_names is None:
+        # Priority order: check 'DATE' first (most common primary date field)
+        # Then check other date fields if DATE is not available
+        date_field_names = ['DATE', 'SODATE', 'EXPDATE', 'GSTDATE', 'CR_AP_DATE', 'DUEDATE', 'UPDATED_ON', 'CREATED_ON']
+    
+    def parse_date_value(date_value):
+        """Parse date value to YYYYMMDD format string, or None if parsing fails."""
+        if date_value is None:
+            return None
+        
+        try:
+            if isinstance(date_value, (datetime.date, datetime.datetime)):
+                # Convert datetime/date objects to YYYYMMDD format
+                return date_value.strftime('%Y%m%d')
+            elif isinstance(date_value, str):
+                date_str = date_value.strip()
+                # Handle YYYYMMDD format (8 digits)
+                if len(date_str) >= 8 and date_str[:8].isdigit():
+                    return date_str[:8]
+                # Handle YYYY-MM-DD format
+                elif '-' in date_str and len(date_str) >= 10:
+                    date_parts = date_str[:10].split('-')
+                    if len(date_parts) == 3:
+                        return ''.join(date_parts)
+            elif isinstance(date_value, bytes):
+                # Handle bytes date values
+                try:
+                    date_str = date_value.decode('ascii', errors='ignore').strip()
+                    if len(date_str) >= 8 and date_str[:8].isdigit():
+                        return date_str[:8]
+                except:
+                    pass
+        except Exception:
+            pass
+        
+        return None
+    
+    # Check date fields in priority order
+    # If primary date field (DATE) is found and is before cutoff, skip
+    # If no date field found or date is >= cutoff, keep the record
+    for field_name in date_field_names:
+        date_value = record_data.get(field_name)
+        if date_value is None:
+            continue
+        
+        date_str = parse_date_value(date_value)
+        if date_str and len(date_str) >= 8 and date_str[:8].isdigit():
+            # If date is before cutoff, skip this record
+            if date_str[:8] < cutoff_date_str:
+                return True
+            # If date is >= cutoff, keep the record (don't skip)
+            # For primary date field (DATE), we can return immediately
+            if field_name == 'DATE':
+                return False
+    
+    # If no valid date field found, keep the record (don't skip - be conservative)
+    return False
+
+
+def serialize_record_fast(record_data, date_fields_cache=None):
+    """
+    Optimized version of serialize_record - inlined and faster
+    Reduces function call overhead and string operations
+    """
+    if date_fields_cache is None:
+        # Cache date field names for faster lookup
+        date_fields_cache = frozenset(['DATE', 'SODATE', 'EXPDATE', 'UPDATED_ON', 'CREATED_ON', 'GSTDATE', 'CR_AP_DATE', 'DUEDATE'])
+    
+    serialized = {}
+    for key, value in record_data.items():
+        # Fast path for None
+        if value is None:
+            serialized[key] = None
+            continue
+        
+        # Fast path for datetime objects
+        if isinstance(value, (datetime.date, datetime.datetime)):
+            serialized[key] = value.isoformat()
+            continue
+        
+        # Fast path for numeric values
+        if isinstance(value, (int, float)):
+            serialized[key] = value
+            continue
+        
+        # Handle strings - optimized
+        if isinstance(value, str):
+            # Only process if contains null bytes or needs cleaning
+            if '\x00' in value:
+                cleaned = value.replace('\x00', '').strip()
+                serialized[key] = None if cleaned == '' else cleaned
+            else:
+                cleaned = value.strip()
+                serialized[key] = None if cleaned == '' else cleaned
+            continue
+        
+        # Handle bytes - optimized
+        if isinstance(value, bytes):
+            try:
+                str_value = value.decode('utf-8', errors='ignore')
+                cleaned = str_value.replace('\x00', '').strip()
+                if cleaned == '' or cleaned == '00000000':
+                    serialized[key] = None
+                else:
+                    # Check if it's a date field - use cached lookup
+                    key_upper = key.upper()
+                    is_date_field = any(df in key_upper for df in date_fields_cache)
+                    if is_date_field:
+                        serialized[key] = cleaned
+                    else:
+                        # Try to convert to float if numeric
+                        try:
+                            serialized[key] = float(cleaned)
+                        except ValueError:
+                            serialized[key] = cleaned
+            except:
+                serialized[key] = None
+            continue
+        
+        # Fallback for other types
+        serialized[key] = str(value)
+    
+    return serialized
+
+
+def read_dbf(dbf_file_path, progress_callback=None, skip_before_date=None):
+    """
+    Read DBF file using the dbf library for proper timestamp handling - OPTIMIZED VERSION
+    with progress reporting support and performance improvements
     
     Args:
         dbf_file_path: Path to the DBF file
         progress_callback: Optional callback function(records_read, status_message) called periodically
+        skip_before_date: Optional date string in YYYYMMDD format (e.g., '20251201'). 
+                         Records with date fields before this date will be skipped early for better performance.
     """
     import sys
     import time
@@ -327,9 +471,13 @@ def read_dbf(dbf_file_path, progress_callback=None):
         # Get field structure
         print(f"📋 Reading field structure...", flush=True)
         fields = []
-        for field in table.field_names:
+        field_names = table.field_names  # Cache field names to avoid repeated lookups
+        date_fields_cache = frozenset(['DATE', 'SODATE', 'EXPDATE', 'UPDATED_ON', 'CREATED_ON', 'GSTDATE', 'CR_AP_DATE', 'DUEDATE'])
+        
+        # Pre-build field info cache for faster access
+        field_info_cache = {}
+        for field in field_names:
             field_info = table.field_info(field)
-            # Safely convert field type to character, handling invalid values
             field_type_char = chr(field_info.field_type) if field_info.field_type > 0 else '?'
             fields.append({
                 "name": field,
@@ -337,90 +485,118 @@ def read_dbf(dbf_file_path, progress_callback=None):
                 "size": field_info.length,
                 "decs": field_info.decimal
             })
+            field_info_cache[field] = {
+                'type': field_type_char,
+                'info': field_info
+            }
         
         print(f"✅ Found {len(fields)} fields, starting to read records...", flush=True)
         
-        # Read records - ORIGINAL WORKING METHOD with progress reporting
+        # Date filtering setup
+        if skip_before_date:
+            print(f"⏭️  Date filtering enabled: Skipping records before {skip_before_date}", flush=True)
+        
+        # Read records - OPTIMIZED VERSION
         data = []
         error_count = 0
         max_errors = 100  # Limit consecutive errors to prevent infinite loops
+        skipped_count = 0  # Track skipped records for reporting
         
         # Progress reporting variables
         records_read = 0
         last_progress_time = time.time()
         progress_interval = 2.0  # Report progress every 2 seconds
-        progress_record_interval = 1000  # Report progress every 1000 records
+        progress_record_interval = 5000  # Report progress every 5000 records (increased for better performance)
         
         start_time = time.time()
         
+        # Optimized record reading loop
         for record in table:
-            # Check if record is deleted (handle both methods)
+            # Check if record is deleted - optimized (check once per record)
             try:
                 if hasattr(record, 'is_deleted') and record.is_deleted():
                     continue
             except:
-                # If is_deleted() method doesn't exist or fails, continue
                 pass
-                
+            
+            # Build record data - optimized: cache field_names to avoid repeated lookups
             record_data = {}
-            for field_name in table.field_names:
+            for field_name in field_names:
                 try:
                     value = getattr(record, field_name)
                     record_data[field_name] = value
                 except Exception as e:
+                    error_str = str(e)
                     # Check if this is the ordinal error from dbf library
-                    if "ordinal must be >= 1" in str(e):
-                        # Field has invalid field type in DBF file, skip it silently
+                    if "ordinal must be >= 1" in error_str:
                         record_data[field_name] = None
                         continue
                     # Handle specific binary conversion issues for date fields
-                    if "invalid literal for int()" in str(e) and any(date_field in field_name.upper() for date_field in ['DATE', 'SODATE', 'EXPDATE', 'UPDATED_ON', 'CREATED_ON', 'GSTDATE', 'CR_AP_DATE', 'DUEDATE']):
-                        # For date fields with binary issues, try to get raw data
-                        try:
-                            # Get field info to determine field type
-                            field_info = table.field_info(field_name)
-                            # Safely convert field type to character, handling invalid values
-                            field_type = chr(field_info.field_type) if field_info.field_type > 0 else '?'
-                            
-                            if field_type == 'D':  # Date field
-                                # Try to read as raw bytes and handle null bytes
-                                raw_value = getattr(record, field_name, None)
-                                if raw_value is not None:
-                                    # If it's bytes, clean it
-                                    if isinstance(raw_value, bytes):
-                                        cleaned_value = raw_value.replace(b'\x00', b'').strip()
-                                        if cleaned_value and cleaned_value != b'00000000':
-                                            record_data[field_name] = cleaned_value.decode('ascii', errors='ignore')
+                    if "invalid literal for int()" in error_str:
+                        key_upper = field_name.upper()
+                        if any(df in key_upper for df in date_fields_cache):
+                            # For date fields with binary issues, try to get raw data
+                            try:
+                                field_type = field_info_cache[field_name]['type']
+                                if field_type == 'D':  # Date field
+                                    raw_value = getattr(record, field_name, None)
+                                    if raw_value is not None:
+                                        if isinstance(raw_value, bytes):
+                                            cleaned_value = raw_value.replace(b'\x00', b'').strip()
+                                            if cleaned_value and cleaned_value != b'00000000':
+                                                record_data[field_name] = cleaned_value.decode('ascii', errors='ignore')
+                                            else:
+                                                record_data[field_name] = None
                                         else:
-                                            record_data[field_name] = None
+                                            record_data[field_name] = raw_value
                                     else:
-                                        record_data[field_name] = raw_value
+                                        record_data[field_name] = None
                                 else:
                                     record_data[field_name] = None
-                            else:
+                            except:
                                 record_data[field_name] = None
-                        except:
+                        else:
                             record_data[field_name] = None
                     else:
-                        print(f"Warning: Could not read field '{field_name}': {e}")
+                        # Only print warning for non-expected errors
+                        if error_count < 10:  # Limit warning spam
+                            print(f"Warning: Could not read field '{field_name}': {e}", flush=True)
                         record_data[field_name] = None
             
-            # Serialize the record - ORIGINAL WORKING METHOD
+            # Early date filtering - skip old records before expensive serialization
+            if skip_before_date:
+                # Convert date_fields_cache frozenset to list for the function
+                date_field_list = list(date_fields_cache) if date_fields_cache else None
+                if should_skip_record_by_date(record_data, skip_before_date, date_field_list):
+                    skipped_count += 1
+                    # Report skipped count periodically
+                    if skipped_count % 10000 == 0:
+                        print(f"⏭️  Skipped {skipped_count:,} records before {skip_before_date}", flush=True)
+                    continue
+            
+            # Serialize the record - using optimized fast version
             try:
-                serialized_record = serialize_record(record_data)
+                serialized_record = serialize_record_fast(record_data, date_fields_cache)
                 data.append(serialized_record)
                 error_count = 0  # Reset error count on successful record
                 
                 records_read += 1
                 
                 # Progress reporting: every N records or every few seconds
-                current_time = time.time()
-                should_report = (
-                    records_read % progress_record_interval == 0 or
-                    (current_time - last_progress_time) >= progress_interval
-                )
-                
-                if should_report:
+                if records_read % progress_record_interval == 0:
+                    current_time = time.time()
+                    elapsed = current_time - start_time
+                    rate = records_read / elapsed if elapsed > 0 else 0
+                    status = f"📥 Reading records: {records_read:,} read ({rate:.0f} records/sec)"
+                    
+                    if progress_callback:
+                        progress_callback(records_read, status)
+                    else:
+                        print(status, flush=True)
+                    
+                    last_progress_time = current_time
+                elif time.time() - last_progress_time >= progress_interval:
+                    current_time = time.time()
                     elapsed = current_time - start_time
                     rate = records_read / elapsed if elapsed > 0 else 0
                     status = f"📥 Reading records: {records_read:,} read ({rate:.0f} records/sec)"
@@ -437,13 +613,16 @@ def read_dbf(dbf_file_path, progress_callback=None):
                 if error_count > max_errors:
                     print(f"Too many consecutive errors ({error_count}), stopping processing to prevent infinite loop", flush=True)
                     break
-                print(f"Warning: Could not serialize record: {serialize_error}", flush=True)
+                if error_count <= 10:  # Limit error spam
+                    print(f"Warning: Could not serialize record: {serialize_error}", flush=True)
                 continue
         
         # Final progress report
         elapsed_total = time.time() - start_time
         rate_total = records_read / elapsed_total if elapsed_total > 0 else 0
         print(f"✅ Read {records_read:,} records in {elapsed_total:.2f}s ({rate_total:.0f} records/sec)", flush=True)
+        if skip_before_date and skipped_count > 0:
+            print(f"⏭️  Skipped {skipped_count:,} records before {skip_before_date} (performance optimization)", flush=True)
         
         table.close()
         
@@ -475,6 +654,27 @@ def test_server_response():
 
 
 def sync_to_server(filename, data, directory):
+    """
+    Sync data to remote server/UBS.
+    Automatically skips DO type orders (DO normally only insert from UBS to server, not synced back).
+    """
+    # Filter out DO type orders for artran (for remote sync to UBS)
+    if filename.lower() == 'artran.dbf' and data and data.get('rows'):
+        original_count = len(data['rows'])
+        filtered_rows = []
+        do_skipped = 0
+        
+        for row in data['rows']:
+            type_value = str(row.get('TYPE', '')).strip().upper()
+            if type_value == 'DO':
+                do_skipped += 1
+                continue
+            filtered_rows.append(row)
+        
+        if do_skipped > 0:
+            print(f"⏭️  Skipped {do_skipped:,} DO type orders when syncing to remote (DO normally only insert from UBS to server)", flush=True)
+            data['rows'] = filtered_rows
+    
     url = os.getenv("SERVER_URL") + "/api/sync/local"
     try:
         response = requests.post(
