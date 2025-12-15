@@ -28,7 +28,7 @@ register_shutdown_function(function() {
 
 try {
     // Minimum order date for sync
-    $minOrderDate = '2025-12-14 ';
+    $minOrderDate = '2025-12-15';
     
     // Use the reusable function
     $result = syncArtranAndIctran(null, null, $minOrderDate);
