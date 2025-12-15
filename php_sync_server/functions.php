@@ -1381,17 +1381,34 @@ function updateUbsRecord($editor, $row, $record, $table_name)
 {
     $columns = $editor->getColumns();
     $columnMap = [];
+    // ✅ FIX: Create map with both lowercase and uppercase keys for case-insensitive lookup
     foreach ($columns as $column) {
-        $colName = strtolower($column->getName());
-        $columnMap[$colName] = $column;
+        $colName = $column->getName();
+        $colNameLower = strtolower($colName);
+        $colNameUpper = strtoupper($colName);
+        // Store with both cases for flexible lookup
+        $columnMap[$colNameLower] = $column;
+        $columnMap[$colNameUpper] = $column;
+        $columnMap[$colName] = $column; // Also store original case
     }
 
     $updatedFields = [];
+    $skippedFields = [];
     foreach ($record as $field => $value) {
-        $column = $columnMap[strtolower($field)] ?? null;
+        // ✅ FIX: Try multiple case variations to find the column
+        $column = $columnMap[strtolower($field)] ?? 
+                  $columnMap[strtoupper($field)] ?? 
+                  $columnMap[$field] ?? null;
+        
         if ($column == null) {
+            // Field doesn't exist in DBF structure - log and skip
+            $skippedFields[] = $field;
             continue;
         }
+        
+        // ✅ FIX: Use the actual column name from DBF (not the field name from record)
+        // This ensures case matches what DBF expects
+        $actualFieldName = $column->getName();
 
         $fieldType = $column->getType();
         $fieldLength = $column->getLength();
@@ -1451,17 +1468,21 @@ function updateUbsRecord($editor, $row, $record, $table_name)
         }
 
         try {
-            $row->set($field, $value);
-            $updatedFields[] = $field;
+            // ✅ FIX: Use actual field name from DBF column (correct case)
+            $row->set($actualFieldName, $value);
+            $updatedFields[] = $actualFieldName;
         } catch (\Throwable $e) {
             // Log the problematic field but continue
-            ProgressDisplay::warning("Skipping field '$field' in $table_name: " . $e->getMessage());
+            ProgressDisplay::warning("⚠️  Skipping field '$field' (DBF: '$actualFieldName') in $table_name: " . $e->getMessage());
         }
     }
     
-    // ✅ DEBUG: Log what fields were updated
+    // ✅ DEBUG: Log what fields were updated and skipped
     if (!empty($updatedFields)) {
         ProgressDisplay::info("🔍 DEBUG: Updated " . count($updatedFields) . " field(s) in $table_name: " . implode(', ', array_slice($updatedFields, 0, 10)) . (count($updatedFields) > 10 ? '...' : ''));
+    }
+    if (!empty($skippedFields)) {
+        ProgressDisplay::warning("⚠️  Skipped " . count($skippedFields) . " field(s) in $table_name (not in DBF structure): " . implode(', ', array_slice($skippedFields, 0, 10)) . (count($skippedFields) > 10 ? '...' : ''));
     }
 
     $editor->writeRecord();
@@ -1534,15 +1555,36 @@ function insertUbsRecord($editor, $record, $table_name, $full_table_name = null,
         throw new Exception("Cannot insert record into $table_name: Primary key field '$primaryKey' is empty or missing. Tried keys: " . implode(', ', array_unique($triedKeys)) . ". Record keys: " . implode(', ', array_keys($record)) . ". Record CUSTNO value: " . ($record['CUSTNO'] ?? $record['custno'] ?? 'NOT FOUND'));
     }
 
+    $skippedFields = [];
     foreach ($record as $field => $value) {
+        // ✅ FIX: Try multiple case variations to find the column
         $fieldUpper = strtoupper($field);
-        if (!isset($structure[$fieldUpper])) continue;
+        $fieldLower = strtolower($field);
+        
+        // Try uppercase first (matches insertUbsRecord pattern), then lowercase, then original
+        $structureKey = $structure[$fieldUpper] ?? 
+                       $structure[$fieldLower] ?? 
+                       $structure[$field] ?? null;
+        
+        // ✅ FIX: Get the actual column object to get correct field name
+        $column = $columnMap[$fieldUpper] ?? 
+                  $columnMap[$fieldLower] ?? 
+                  $columnMap[$field] ?? null;
+        
+        if ($structureKey === null || $column === null) {
+            // Field doesn't exist in DBF structure - log and skip
+            $skippedFields[] = $field;
+            continue;
+        }
+        
+        // ✅ FIX: Use the actual column name from DBF (not the field name from record)
+        $actualFieldName = $column->getName();
 
         try {
             if ($value === null) $value = "";
 
-            $fieldType = $structure[$fieldUpper]['type'];
-            $fieldLength = $structure[$fieldUpper]['length'];
+            $fieldType = $structureKey['type'];
+            $fieldLength = $structureKey['length'];
 
             // Special handling for UPDATED_ON field regardless of data type
             if ($fieldUpper === 'UPDATED_ON') {
@@ -1583,7 +1625,7 @@ function insertUbsRecord($editor, $record, $table_name, $full_table_name = null,
 
             // Handle numeric fields
             if (in_array($fieldType, ['N', 'F']) && $value !== null && $value !== '') {
-                $decimal = $structure[$fieldUpper]['decimal'];
+                $decimal = $structureKey['decimal'];
                 if (is_numeric($value)) {
                     // Ensure number fits within field constraints
                     $maxValue = pow(10, $fieldLength - ($decimal > 0 ? $decimal + 1 : 0)) - 1;
@@ -1598,11 +1640,17 @@ function insertUbsRecord($editor, $record, $table_name, $full_table_name = null,
                 }
             }
 
-            $newRow->set($field, $value);
+            // ✅ FIX: Use actual field name from DBF column (correct case)
+            $newRow->set($actualFieldName, $value);
         } catch (\Throwable $e) {
             // Log the problematic field but continue
-            ProgressDisplay::warning("Skipping field '$field' in $table_name: " . $e->getMessage());
+            ProgressDisplay::warning("⚠️  Skipping field '$field' (DBF: '$actualFieldName') in $table_name: " . $e->getMessage());
         }
+    }
+    
+    // ✅ DEBUG: Log skipped fields
+    if (!empty($skippedFields)) {
+        ProgressDisplay::warning("⚠️  Skipped " . count($skippedFields) . " field(s) in $table_name insert (not in DBF structure): " . implode(', ', array_slice($skippedFields, 0, 10)) . (count($skippedFields) > 10 ? '...' : ''));
     }
 
     // ✅ FIX: Write the record explicitly - ensure the appended record is written
@@ -1877,6 +1925,25 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             }
         }
 
+        // ✅ Special handling for orders syncing to artran (CN type)
+        if ($remote_table_name == 'orders') {
+            // Get order type from dataRow
+            $orderType = strtoupper(trim($converted['TYPE'] ?? $dataRow['type'] ?? ''));
+            
+            if ($orderType === 'CN') {
+                // For CN: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
+                // Get the amount from grand_amount or GRAND_BIL
+                $amount = $dataRow['grand_amount'] ?? $converted['GRAND_BIL'] ?? $converted['GRAND'] ?? 0;
+                $converted['CREDITAMT'] = $amount;
+                $converted['DEBITAMT'] = 0;
+            } else {
+                // For other types: Set DEBITAMT normally, clear CREDITAMT
+                $amount = $dataRow['grand_amount'] ?? $converted['GRAND_BIL'] ?? $converted['GRAND'] ?? 0;
+                $converted['DEBITAMT'] = $amount;
+                $converted['CREDITAMT'] = 0;
+            }
+        }
+
         // Special handling for order_items syncing to ictran
         if ($remote_table_name == 'order_items') {
             // Format DATE field if it's already set (from mapping) - ensure it's YYYY-MM-DD format
@@ -2095,13 +2162,28 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             $referenceNo = $dataRow['reference_no'] ?? null;
             if ($referenceNo) {
                 // Get order data (customer_id, type, customer_name, customer_code, order_date, and discount)
-                $orderSql = "SELECT customer_id, type, customer_name, customer_code, order_date, discount FROM orders WHERE reference_no='" . $db->escape($referenceNo) . "'";
+                $orderSql = "SELECT customer_id, type, customer_name, customer_code, order_date, discount, grand_amount, net_amount FROM orders WHERE reference_no='" . $db->escape($referenceNo) . "'";
                 $orderData = $db->first($orderSql);
 
                 if ($orderData) {
                     // Ensure TYPE is set
                     if (!isset($converted['TYPE']) && isset($orderData['type'])) {
                         $converted['TYPE'] = $orderData['type'];
+                    }
+                    
+                    // ✅ Special handling for CN (Credit Note) type when syncing from remote to UBS
+                    $orderType = strtoupper(trim($converted['TYPE'] ?? $orderData['type'] ?? ''));
+                    if ($orderType === 'CN') {
+                        // For CN: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
+                        // Get the amount from grand_amount or net_amount
+                        $amount = $orderData['grand_amount'] ?? $orderData['net_amount'] ?? $converted['GRAND_BIL'] ?? $converted['GRAND'] ?? 0;
+                        $converted['CREDITAMT'] = $amount;
+                        $converted['DEBITAMT'] = 0;
+                    } else {
+                        // For other types: Set DEBITAMT normally, clear CREDITAMT
+                        $amount = $orderData['grand_amount'] ?? $orderData['net_amount'] ?? $converted['GRAND_BIL'] ?? $converted['GRAND'] ?? 0;
+                        $converted['DEBITAMT'] = $amount;
+                        $converted['CREDITAMT'] = 0;
                     }
 
                     // Set NAME = customer_name
