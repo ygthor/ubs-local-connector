@@ -191,31 +191,19 @@ class SyncGUI:
         running_programs = sorted(list(set(running_programs)))
         
         if running_programs:
-            # Show error message and exit
+            # Show error message and exit immediately
             names = ", ".join(running_programs)
             error_msg = f"ERROR - PROGRAMS DETECTED\n\nDetected running programs: {names}\n\nPlease close these programs before running the sync.\n\nThe application will now exit."
             
-            # Show messagebox error
+            # Show messagebox error (blocking - waits for user to click OK)
             messagebox.showerror(
                 "ERROR - PROGRAMS DETECTED",
                 error_msg
             )
             
-            # Log to GUI
-            self.update_progress(0, "Error: Programs detected", 
-                               "═══════════════════════════════════════════════════════════", "")
-            self.update_progress(0, "Error: Programs detected", 
-                               f"❌ ERROR - PROGRAMS DETECTED", "")
-            self.update_progress(0, "Error: Programs detected", 
-                               f"Detected running programs: {names}", "")
-            self.update_progress(0, "Error: Programs detected", 
-                               "Please close these programs before running the sync.", "")
-            self.update_progress(0, "Error: Programs detected", 
-                               "Exiting application...", "")
-            
-            # Exit the application immediately
-            self.root.after(500, lambda: (self.root.quit(), sys.exit(1)))
-            return True  # Return True to indicate programs were detected
+            # Exit the application immediately after messagebox is closed
+            self.root.destroy()
+            sys.exit(1)
         else:
             self.update_progress(0, "No conflicting programs detected", 
                                "No conflicting programs detected. Proceeding...", "")
