@@ -10,6 +10,13 @@ import shutil
 from datetime import datetime
 import platform
 
+# Try to import psutil for process checking, fallback to tasklist if not available
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
 class SyncGUI:
     def __init__(self, root):
         self.root = root
@@ -36,6 +43,9 @@ class SyncGUI:
         self.current_file_num = 0
         self.current_table_num = 0
         self.tables_found = False
+        
+        # Programs to detect (same as PowerShell script)
+        self.target_programs = ["cpl", "vstk", "daccount"]
         
         # Check admin
         if not self.is_admin():
@@ -67,6 +77,8 @@ class SyncGUI:
         
         # Skip dialog - go straight to sync (default to normal sync)
         self.setup_ui()
+        # Check for running programs before starting sync
+        self.check_running_programs()
         self.start_sync()
     
     def find_python(self):
@@ -143,6 +155,97 @@ class SyncGUI:
             None, "runas", sys.executable, " ".join(sys.argv), None, 1
         )
         sys.exit()
+    
+    def check_running_programs(self):
+        """Check for running programs that might conflict with sync"""
+        self.update_progress(0, "Checking for running programs...", 
+                           "Checking for running programs...", "")
+        
+        running_programs = []
+        
+        if PSUTIL_AVAILABLE:
+            # Use psutil if available (cleaner approach)
+            try:
+                for proc in psutil.process_iter(['name']):
+                    try:
+                        proc_name = proc.info['name'].lower()
+                        # Remove .exe extension if present for comparison
+                        proc_name_no_ext = proc_name.replace('.exe', '')
+                        # Check if process name (with or without extension) matches target programs
+                        if proc_name_no_ext in self.target_programs or proc_name in self.target_programs:
+                            # Store without extension to match target_programs format
+                            running_programs.append(proc_name_no_ext)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        pass
+            except Exception as e:
+                # Fallback to tasklist if psutil fails
+                running_programs = self._check_running_programs_tasklist()
+        else:
+            # Use tasklist command on Windows
+            running_programs = self._check_running_programs_tasklist()
+        
+        # Remove duplicates and sort
+        running_programs = sorted(list(set(running_programs)))
+        
+        if running_programs:
+            # Show warning message (similar to PowerShell script)
+            names = ", ".join(running_programs)
+            warning_msg = f"WARNING - PROGRAMS DETECTED\n\nDetected running programs: {names}\n\nContinuing anyway..."
+            
+            # Show messagebox warning
+            messagebox.showwarning(
+                "WARNING - PROGRAMS DETECTED",
+                warning_msg
+            )
+            
+            # Log to GUI
+            self.update_progress(0, "Warning: Programs detected", 
+                               "═══════════════════════════════════════════════════════════", "")
+            self.update_progress(0, "Warning: Programs detected", 
+                               f"⚠️ WARNING - PROGRAMS DETECTED", "")
+            self.update_progress(0, "Warning: Programs detected", 
+                               f"Detected running programs: {names}", "")
+            self.update_progress(0, "Warning: Programs detected", 
+                               "Continuing anyway...", "")
+        else:
+            self.update_progress(0, "No conflicting programs detected", 
+                               "No conflicting programs detected. Proceeding...", "")
+    
+    def _check_running_programs_tasklist(self):
+        """Check for running programs using Windows tasklist command"""
+        running_programs = []
+        
+        if platform.system() != 'Windows':
+            return running_programs
+        
+        try:
+            # Run tasklist command
+            result = subprocess.run(
+                ['tasklist', '/FO', 'CSV', '/NH'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == 'Windows' else 0
+            )
+            
+            if result.returncode == 0:
+                # Parse output - CSV format: "Image Name","PID","Session Name","Session#","Mem Usage"
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        # Extract process name from CSV (first field)
+                        parts = line.split(',')
+                        if parts:
+                            proc_name = parts[0].strip('"').lower()
+                            proc_name_no_ext = proc_name.replace('.exe', '')
+                            # Check if process name (with or without extension) matches target programs
+                            if proc_name_no_ext in self.target_programs or proc_name in self.target_programs:
+                                # Store without extension to match target_programs format
+                                running_programs.append(proc_name_no_ext)
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, Exception):
+            # Silently fail if tasklist doesn't work
+            pass
+        
+        return running_programs
     
     def ask_sync_mode(self):
         """Ask user to choose between normal sync and resync"""
