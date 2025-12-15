@@ -103,8 +103,9 @@ class Converter
                 'CUSTNO'     => 'customer_code',
                 'NAME'       => 'name',
                 'NAME2'      => 'company_name',
-                'ADD1'       => 'address', // overwritten from 'address1'
+                'ADD1'       => 'address1', // overwritten from 'address1'
                 'ADD2'       => 'address2',
+                'ADD3'       => 'address3',
                 'POSTCODE'   => 'postcode',
                 'STATE'      => 'state',
                 'AREA'       => 'territory',
