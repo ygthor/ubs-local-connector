@@ -188,25 +188,30 @@ class SyncGUI:
         running_programs = sorted(list(set(running_programs)))
         
         if running_programs:
-            # Show warning message (similar to PowerShell script)
+            # Show error message and exit
             names = ", ".join(running_programs)
-            warning_msg = f"WARNING - PROGRAMS DETECTED\n\nDetected running programs: {names}\n\nContinuing anyway..."
+            error_msg = f"ERROR - PROGRAMS DETECTED\n\nDetected running programs: {names}\n\nPlease close these programs before running the sync.\n\nThe application will now exit."
             
-            # Show messagebox warning
-            messagebox.showwarning(
-                "WARNING - PROGRAMS DETECTED",
-                warning_msg
+            # Show messagebox error
+            messagebox.showerror(
+                "ERROR - PROGRAMS DETECTED",
+                error_msg
             )
             
             # Log to GUI
-            self.update_progress(0, "Warning: Programs detected", 
+            self.update_progress(0, "Error: Programs detected", 
                                "═══════════════════════════════════════════════════════════", "")
-            self.update_progress(0, "Warning: Programs detected", 
-                               f"⚠️ WARNING - PROGRAMS DETECTED", "")
-            self.update_progress(0, "Warning: Programs detected", 
+            self.update_progress(0, "Error: Programs detected", 
+                               f"❌ ERROR - PROGRAMS DETECTED", "")
+            self.update_progress(0, "Error: Programs detected", 
                                f"Detected running programs: {names}", "")
-            self.update_progress(0, "Warning: Programs detected", 
-                               "Continuing anyway...", "")
+            self.update_progress(0, "Error: Programs detected", 
+                               "Please close these programs before running the sync.", "")
+            self.update_progress(0, "Error: Programs detected", 
+                               "Exiting application...", "")
+            
+            # Exit the application
+            self.root.after(1000, lambda: (self.root.quit(), sys.exit(1)))
         else:
             self.update_progress(0, "No conflicting programs detected", 
                                "No conflicting programs detected. Proceeding...", "")
