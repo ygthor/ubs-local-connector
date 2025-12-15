@@ -78,7 +78,9 @@ class SyncGUI:
         # Skip dialog - go straight to sync (default to normal sync)
         self.setup_ui()
         # Check for running programs before starting sync
-        self.check_running_programs()
+        if self.check_running_programs():
+            # Programs detected, exit - don't start sync
+            return
         self.start_sync()
     
     def find_python(self):
@@ -157,7 +159,8 @@ class SyncGUI:
         sys.exit()
     
     def check_running_programs(self):
-        """Check for running programs that might conflict with sync"""
+        """Check for running programs that might conflict with sync
+        Returns True if programs are detected (should halt), False otherwise"""
         self.update_progress(0, "Checking for running programs...", 
                            "Checking for running programs...", "")
         
@@ -210,11 +213,13 @@ class SyncGUI:
             self.update_progress(0, "Error: Programs detected", 
                                "Exiting application...", "")
             
-            # Exit the application
-            self.root.after(1000, lambda: (self.root.quit(), sys.exit(1)))
+            # Exit the application immediately
+            self.root.after(500, lambda: (self.root.quit(), sys.exit(1)))
+            return True  # Return True to indicate programs were detected
         else:
             self.update_progress(0, "No conflicting programs detected", 
                                "No conflicting programs detected. Proceeding...", "")
+            return False  # Return False to indicate no programs detected, can proceed
     
     def _check_running_programs_tasklist(self):
         """Check for running programs using Windows tasklist command"""
