@@ -1217,6 +1217,9 @@ function recalculateArtranTotals($refNos)
                 $refNoOriginal = $refNosLookup[$rowRefNo];
 
                 try {
+                    // Get order TYPE to check if it's CN (Credit Note)
+                    $orderType = strtoupper(trim($row->get('TYPE') ?? ''));
+
                     // Update totals
                     $row->set('GROSS_BIL', $totals['grossBil']);
                     $row->set('NET_BIL', $totals['netBil']);
@@ -1225,12 +1228,24 @@ function recalculateArtranTotals($refNos)
                     $row->set('INVGROSS', $totals['invgross']);
                     $row->set('NET', $totals['net']);
                     $row->set('GRAND', $totals['grand']);
-                    $row->set('DEBITAMT', $totals['debitamt']);
+                    
+                    // ✅ Special handling for CN (Credit Note) type
+                    if ($orderType === 'CN') {
+                        // For CN: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
+                        $row->set('CREDITAMT', $totals['debitamt']);
+                        $row->set('DEBITAMT', 0);
+                    } else {
+                        // For other types (INV, SO, etc.): Set DEBITAMT normally
+                        $row->set('DEBITAMT', $totals['debitamt']);
+                        // Clear CREDITAMT for non-CN types (set to 0)
+                        $row->set('CREDITAMT', 0);
+                    }
 
                     $artranEditor->writeRecord();
                     $updatedCount++;
 
-                    ProgressDisplay::info("📝 Updated artran DBF record for REFNO: $refNoOriginal (GROSS_BIL: {$totals['grossBil']}, GRAND_BIL: {$totals['grandBil']}, Items: {$totals['itemCount']})");
+                    $typeInfo = $orderType === 'CN' ? " (CN: CREDITAMT={$totals['debitamt']}, DEBITAMT=0)" : "";
+                    ProgressDisplay::info("📝 Updated artran DBF record for REFNO: $refNoOriginal (GROSS_BIL: {$totals['grossBil']}, GRAND_BIL: {$totals['grandBil']}, Items: {$totals['itemCount']})$typeInfo");
                 } catch (\Throwable $e) {
                     ProgressDisplay::error("❌ Error setting artran fields for REFNO $refNoOriginal: " . $e->getMessage());
                     // Continue with other REFNOs
@@ -1263,6 +1278,12 @@ function recalculateArtranTotals($refNos)
                     foreach ($calculatedTotals as $refNoUpper => $totals) {
                         $refNoOriginal = $refNosLookup[$refNoUpper];
                         
+                        // Get order TYPE to check if it's CN
+                        $refNoEscaped = $db_local->escape($refNoOriginal);
+                        $typeSql = "SELECT TYPE FROM `ubs_ubsstk2015_artran` WHERE `REFNO` = '$refNoEscaped'";
+                        $typeResult = $db_local->first($typeSql);
+                        $orderType = strtoupper(trim($typeResult['TYPE'] ?? ''));
+                        
                         $updateData = [
                             'GROSS_BIL' => $totals['grossBil'],
                             'NET_BIL' => $totals['netBil'],
@@ -1271,12 +1292,21 @@ function recalculateArtranTotals($refNos)
                             'INVGROSS' => $totals['invgross'],
                             'NET' => $totals['net'],
                             'GRAND' => $totals['grand'],
-                            'DEBITAMT' => $totals['debitamt'],
                             'UPDATED_ON' => date('Y-m-d H:i:s')
                         ];
+                        
+                        // ✅ Special handling for CN (Credit Note) type
+                        if ($orderType === 'CN') {
+                            // For CN: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
+                            $updateData['CREDITAMT'] = $totals['debitamt'];
+                            $updateData['DEBITAMT'] = 0;
+                        } else {
+                            // For other types: Set DEBITAMT normally, clear CREDITAMT
+                            $updateData['DEBITAMT'] = $totals['debitamt'];
+                            $updateData['CREDITAMT'] = 0;
+                        }
 
                         // Update using REFNO as the key
-                        $refNoEscaped = $db_local->escape($refNoOriginal);
                         $updateSql = "UPDATE `ubs_ubsstk2015_artran` SET ";
                         $updateFields = [];
                         foreach ($updateData as $field => $value) {
@@ -1788,6 +1818,7 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $converted['quantity'] = $qty;
             }
         }
+
 
         // Remove fields that should not be in remote tables
         // These fields may exist in UBS but not in remote tables
