@@ -1070,6 +1070,8 @@ function getArtranTypeByRefNo($refNo, $directory)
  * Recalculate artran totals based on ictran records
  * Updates GROSS_BIL, NET_BIL, GRAND_BIL, DEBIT_BIL, INVGROSS, NET, GRAND, DEBITAMT
  * 
+ * ✅ OPTIMIZED: Batch processing - reads files once, updates all REFNOs in single pass
+ * 
  * @param array $refNos Array of REFNOs (reference numbers) to recalculate
  */
 function recalculateArtranTotals($refNos)
@@ -1079,7 +1081,8 @@ function recalculateArtranTotals($refNos)
     }
 
     try {
-        ProgressDisplay::info("🔄 Recalculating artran totals for " . count($refNos) . " reference(s)");
+        $refNoCount = count($refNos);
+        ProgressDisplay::info("🔄 Recalculating artran totals for $refNoCount reference(s)");
 
         // Parse artran table path
         $artranTable = 'ubs_ubsstk2015_artran';
@@ -1094,177 +1097,186 @@ function recalculateArtranTotals($refNos)
         $ictranTableName = $arr['table'];
         $ictranPath = "C:/$directory/" . ENV::DBF_SUBPATH . "/{$ictranTableName}.dbf";
 
-        // Process each REFNO
+        // ✅ OPTIMIZATION 1: Create normalized REFNO lookup (case-insensitive, trimmed)
+        $refNosLookup = [];
         foreach ($refNos as $refNo) {
-            try {
-                $refNoTrimmed = trim($refNo);
-                ProgressDisplay::info("🔄 Processing REFNO: $refNoTrimmed");
+            $refNosLookup[strtoupper(trim($refNo))] = trim($refNo);
+        }
 
-                // Read all ictran records for this REFNO
-                $ictranReader = new \XBase\TableReader($ictranPath);
+        // ✅ SAFETY: Add safety checks before processing
+        if (isUbsRunning()) {
+            throw new Exception("❌ UBS software is currently running! Cannot update artran DBF.");
+        }
 
-                $grossBil = 0;
-                $netBil = 0;
-                $grandBil = 0;
-                $debitBil = 0;
-                $invgross = 0;
-                $net = 0;
-                $grand = 0;
-                $debitamt = 0;
-                $totalDiscount = 0;
-                $totalTax = 0;
-                $itemCount = 0;
+        if (isDbfFileLocked($artranPath)) {
+            throw new Exception("❌ Artran DBF file is currently locked or in use.");
+        }
 
-                while ($row = $ictranReader->nextRecord()) {
-                    if ($row->isDeleted()) continue;
+        // ✅ OPTIMIZATION 2: Create backup ONCE before processing all REFNOs
+        $artranBackupPath = backupDbfFile($artranPath);
+        if ($artranBackupPath === false) {
+            ProgressDisplay::warning("⚠️  Could not create backup for artran, but continuing anyway...");
+        }
 
-                    $rowRefNo = trim($row->get('REFNO') ?? '');
-                    // Case-insensitive comparison
-                    if (strtoupper($rowRefNo) !== strtoupper($refNoTrimmed)) {
-                        continue;
-                    }
+        // ✅ OPTIMIZATION 3: Acquire file lock ONCE
+        $artranLockFp = acquireDbfLock($artranPath);
+        if ($artranLockFp === false) {
+            throw new Exception("❌ Cannot acquire exclusive lock on artran DBF file.");
+        }
 
-                    $itemCount++;
+        try {
+            // ✅ OPTIMIZATION 4: Read ictran file ONCE and group totals by REFNO
+            ProgressDisplay::info("📊 Reading ictran records...");
+            $ictranTotals = []; // [REFNO => totals array]
+            
+            $ictranReader = new \XBase\TableReader($ictranPath);
+            $ictranRecordCount = 0;
+            
+            while ($row = $ictranReader->nextRecord()) {
+                if ($row->isDeleted()) continue;
+                
+                $rowRefNo = strtoupper(trim($row->get('REFNO') ?? ''));
+                
+                // Only process REFNOs we need to update
+                if (!isset($refNosLookup[$rowRefNo])) {
+                    continue;
+                }
+                
+                $ictranRecordCount++;
+                
+                // Initialize totals for this REFNO if not exists
+                if (!isset($ictranTotals[$rowRefNo])) {
+                    $ictranTotals[$rowRefNo] = [
+                        'grossBil' => 0,
+                        'netBil' => 0,
+                        'invgross' => 0,
+                        'net' => 0,
+                        'totalDiscount' => 0,
+                        'totalTax' => 0,
+                        'itemCount' => 0
+                    ];
+                }
+                
+                // Sum up amounts from ictran
+                $amtBil = (float)($row->get('AMT_BIL') ?? 0);
+                $amt = (float)($row->get('AMT') ?? 0);
+                $disamtBil = (float)($row->get('DISAMT_BIL') ?? 0);
+                $taxamt = (float)($row->get('TAXAMT') ?? 0);
+                
+                $ictranTotals[$rowRefNo]['grossBil'] += $amtBil;
+                $ictranTotals[$rowRefNo]['netBil'] += ($amtBil - $disamtBil);
+                $ictranTotals[$rowRefNo]['invgross'] += $amt;
+                $ictranTotals[$rowRefNo]['net'] += ($amt - $disamtBil);
+                $ictranTotals[$rowRefNo]['totalDiscount'] += $disamtBil;
+                $ictranTotals[$rowRefNo]['totalTax'] += $taxamt;
+                $ictranTotals[$rowRefNo]['itemCount']++;
+            }
+            
+            $ictranReader->close();
+            ProgressDisplay::info("📊 Processed $ictranRecordCount ictran records for " . count($ictranTotals) . " REFNO(s)");
 
-                    // Sum up amounts from ictran
-                    $amtBil = (float)($row->get('AMT_BIL') ?? 0);
-                    $amt1Bil = (float)($row->get('AMT1_BIL') ?? 0);
-                    $amt = (float)($row->get('AMT') ?? 0);
-                    $amt1 = (float)($row->get('AMT1') ?? 0);
-                    $disamtBil = (float)($row->get('DISAMT_BIL') ?? 0);
-                    $taxamt = (float)($row->get('TAXAMT') ?? 0);
+            // ✅ OPTIMIZATION 5: Calculate grand totals for all REFNOs
+            $calculatedTotals = [];
+            foreach ($ictranTotals as $refNoUpper => $totals) {
+                $grandBil = $totals['netBil'] + $totals['totalTax'];
+                $grand = $totals['net'] + $totals['totalTax'];
+                
+                $calculatedTotals[$refNoUpper] = [
+                    'grossBil' => $totals['grossBil'],
+                    'netBil' => $totals['netBil'],
+                    'grandBil' => $grandBil,
+                    'debitBil' => $grandBil,
+                    'invgross' => $totals['invgross'],
+                    'net' => $totals['net'],
+                    'grand' => $grand,
+                    'debitamt' => $grand,
+                    'itemCount' => $totals['itemCount']
+                ];
+            }
 
-                    $grossBil += $amtBil;
-                    $netBil += ($amtBil - $disamtBil);
-                    $invgross += $amt;
-                    $net += ($amt - $disamtBil);
-                    $totalDiscount += $disamtBil;
-                    $totalTax += $taxamt;
+            // ✅ OPTIMIZATION 6: Open artranEditor ONCE and update all REFNOs in single pass
+            ProgressDisplay::info("📝 Updating artran DBF records...");
+            $artranEditor = new \XBase\TableEditor($artranPath, [
+                'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
+            ]);
+
+            $updatedCount = 0;
+            $artranEditor->moveTo(0); // Reset to beginning
+
+            while ($row = $artranEditor->nextRecord()) {
+                if ($row->isDeleted()) continue;
+
+                $rowRefNo = strtoupper(trim($row->get('REFNO') ?? ''));
+
+                // Check if this REFNO needs updating
+                if (!isset($calculatedTotals[$rowRefNo])) {
+                    continue;
                 }
 
-                $ictranReader->close();
-
-                ProgressDisplay::info("📊 Found $itemCount ictran items for REFNO: $refNoTrimmed");
-                ProgressDisplay::info("📊 Totals - GROSS_BIL: $grossBil, NET_BIL: $netBil, Tax: $totalTax");
-
-                // Calculate grand totals (net + tax)
-                $grandBil = $netBil + $totalTax;
-                $debitBil = $grandBil;
-                $grand = $net + $totalTax;
-                $debitamt = $grand;
-
-                // ✅ SAFETY: Add safety checks before writing to artran DBF
-                // Check if UBS is running
-                if (isUbsRunning()) {
-                    throw new Exception("❌ UBS software is currently running! Cannot update artran DBF.");
-                }
-
-                // Check if file is locked
-                if (isDbfFileLocked($artranPath)) {
-                    throw new Exception("❌ Artran DBF file is currently locked or in use.");
-                }
-
-                // Create backup before writing
-                $artranBackupPath = backupDbfFile($artranPath);
-                if ($artranBackupPath === false) {
-                    ProgressDisplay::warning("⚠️  Could not create backup for artran, but continuing anyway...");
-                }
-
-                // Acquire file lock
-                $artranLockFp = acquireDbfLock($artranPath);
-                if ($artranLockFp === false) {
-                    throw new Exception("❌ Cannot acquire exclusive lock on artran DBF file.");
-                }
+                $totals = $calculatedTotals[$rowRefNo];
+                $refNoOriginal = $refNosLookup[$rowRefNo];
 
                 try {
-                    // Update artran record
-                    $artranEditor = new \XBase\TableEditor($artranPath, [
-                        'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE,
-                    ]);
+                    // Update totals
+                    $row->set('GROSS_BIL', $totals['grossBil']);
+                    $row->set('NET_BIL', $totals['netBil']);
+                    $row->set('GRAND_BIL', $totals['grandBil']);
+                    $row->set('DEBIT_BIL', $totals['debitBil']);
+                    $row->set('INVGROSS', $totals['invgross']);
+                    $row->set('NET', $totals['net']);
+                    $row->set('GRAND', $totals['grand']);
+                    $row->set('DEBITAMT', $totals['debitamt']);
 
-                    $found = false;
-                    $artranEditor->moveTo(0); // Reset to beginning
+                    $artranEditor->writeRecord();
+                    $updatedCount++;
 
-                    while ($row = $artranEditor->nextRecord()) {
-                        if ($row->isDeleted()) continue;
-
-                        $rowRefNo = trim($row->get('REFNO') ?? '');
-
-                        // Case-insensitive comparison and handle whitespace
-                        if (strtoupper($rowRefNo) === strtoupper($refNoTrimmed)) {
-                            // Update totals
-                            try {
-                                $row->set('GROSS_BIL', $grossBil);
-                                $row->set('NET_BIL', $netBil);
-                                $row->set('GRAND_BIL', $grandBil);
-                                $row->set('DEBIT_BIL', $debitBil);
-                                $row->set('INVGROSS', $invgross);
-                                $row->set('NET', $net);
-                                $row->set('GRAND', $grand);
-                                $row->set('DEBITAMT', $debitamt);
-
-                                $artranEditor->writeRecord();
-
-                                // Always save since we're using CLONE mode
-                                $artranEditor->save();
-
-                                // ✅ Validate file after save
-                                if (!validateDbfFile($artranPath)) {
-                                    throw new Exception("DBF file validation failed after artran update. File may be corrupted.");
-                                }
-
-                                $found = true;
-                                ProgressDisplay::info("📝 Updated artran DBF record for REFNO: $refNoTrimmed");
-                                break;
-                            } catch (\Throwable $e) {
-                                ProgressDisplay::error("❌ Error setting artran fields for REFNO $refNoTrimmed: " . $e->getMessage());
-                                throw $e;
-                            }
-                        }
-                    }
-
-                    $artranEditor->close();
+                    ProgressDisplay::info("📝 Updated artran DBF record for REFNO: $refNoOriginal (GROSS_BIL: {$totals['grossBil']}, GRAND_BIL: {$totals['grandBil']}, Items: {$totals['itemCount']})");
                 } catch (\Throwable $e) {
-                    // ✅ Restore from backup if error occurred
-                    if ($artranBackupPath !== null && file_exists($artranBackupPath)) {
-                        ProgressDisplay::warning("⚠️  Error occurred during artran DBF write. Attempting to restore from backup...");
-                        try {
-                            copy($artranBackupPath, $artranPath);
-                            ProgressDisplay::info("✅ Artran DBF file restored from backup");
-                        } catch (\Throwable $restoreError) {
-                            ProgressDisplay::error("❌ Failed to restore artran DBF file from backup: " . $restoreError->getMessage());
-                        }
-                    }
-                    throw $e;
-                } finally {
-                    // ✅ Always release lock
-                    if (isset($artranLockFp) && $artranLockFp !== null) {
-                        releaseDbfLock($artranLockFp);
-                    }
+                    ProgressDisplay::error("❌ Error setting artran fields for REFNO $refNoOriginal: " . $e->getMessage());
+                    // Continue with other REFNOs
                 }
+            }
 
-                if ($found) {
-                    ProgressDisplay::info("✅ Updated artran DBF for REFNO: $refNo (GROSS_BIL: $grossBil, GRAND_BIL: $grandBil)");
+            // ✅ OPTIMIZATION 7: Save ONCE after all updates
+            if ($updatedCount > 0) {
+                $artranEditor->save();
+                
+                // Validate file after save
+                if (!validateDbfFile($artranPath)) {
+                    throw new Exception("DBF file validation failed after artran update. File may be corrupted.");
+                }
+                
+                ProgressDisplay::info("✅ Updated $updatedCount artran DBF record(s)");
+            } else {
+                ProgressDisplay::warning("⚠️  No artran records found to update");
+            }
 
-                    // Also update local MySQL table
-                    try {
-                        $db_local = new mysql();
-                        $db_local->connect();
+            $artranEditor->close();
 
+            // ✅ OPTIMIZATION 8: Batch update MySQL instead of one-by-one
+            if ($updatedCount > 0) {
+                try {
+                    $db_local = new mysql();
+                    $db_local->connect();
+
+                    $updateCount = 0;
+                    foreach ($calculatedTotals as $refNoUpper => $totals) {
+                        $refNoOriginal = $refNosLookup[$refNoUpper];
+                        
                         $updateData = [
-                            'GROSS_BIL' => $grossBil,
-                            'NET_BIL' => $netBil,
-                            'GRAND_BIL' => $grandBil,
-                            'DEBIT_BIL' => $debitBil,
-                            'INVGROSS' => $invgross,
-                            'NET' => $net,
-                            'GRAND' => $grand,
-                            'DEBITAMT' => $debitamt,
+                            'GROSS_BIL' => $totals['grossBil'],
+                            'NET_BIL' => $totals['netBil'],
+                            'GRAND_BIL' => $totals['grandBil'],
+                            'DEBIT_BIL' => $totals['debitBil'],
+                            'INVGROSS' => $totals['invgross'],
+                            'NET' => $totals['net'],
+                            'GRAND' => $totals['grand'],
+                            'DEBITAMT' => $totals['debitamt'],
                             'UPDATED_ON' => date('Y-m-d H:i:s')
                         ];
 
                         // Update using REFNO as the key
-                        $refNoEscaped = $db_local->escape($refNo);
+                        $refNoEscaped = $db_local->escape($refNoOriginal);
                         $updateSql = "UPDATE `ubs_ubsstk2015_artran` SET ";
                         $updateFields = [];
                         foreach ($updateData as $field => $value) {
@@ -1275,31 +1287,36 @@ function recalculateArtranTotals($refNos)
                         $updateSql .= implode(', ', $updateFields) . " WHERE `REFNO` = '$refNoEscaped'";
 
                         $db_local->query($updateSql);
-
-                        // Verify update
-                        $verifySql = "SELECT COUNT(*) as count FROM `ubs_ubsstk2015_artran` WHERE `REFNO` = '$refNoEscaped'";
-                        $verifyResult = $db_local->first($verifySql);
-                        $verifyCount = $verifyResult['count'] ?? 0;
-
-                        if ($verifyCount > 0) {
-                            ProgressDisplay::info("✅ Updated local MySQL artran for REFNO: $refNo");
-                        } else {
-                            ProgressDisplay::warning("⚠️  Local MySQL update completed but REFNO not found: $refNo");
-                        }
-
-                        $db_local->close();
-                    } catch (\Throwable $e) {
-                        ProgressDisplay::error("❌ Error updating local MySQL artran for REFNO $refNo: " . $e->getMessage());
-                        // Continue - DBF update succeeded
+                        $updateCount++;
                     }
-                } else {
-                    ProgressDisplay::warning("⚠️  Artran record not found for REFNO: $refNo");
+
+                    ProgressDisplay::info("✅ Updated $updateCount local MySQL artran record(s)");
+                    $db_local->close();
+                } catch (\Throwable $e) {
+                    ProgressDisplay::error("❌ Error updating local MySQL artran: " . $e->getMessage());
+                    // Continue - DBF update succeeded
                 }
-            } catch (\Throwable $e) {
-                ProgressDisplay::error("❌ Error recalculating artran totals for REFNO $refNo: " . $e->getMessage());
-                // Continue with next REFNO
+            }
+
+        } catch (\Throwable $e) {
+            // ✅ Restore from backup if error occurred
+            if ($artranBackupPath !== null && file_exists($artranBackupPath)) {
+                ProgressDisplay::warning("⚠️  Error occurred during artran DBF write. Attempting to restore from backup...");
+                try {
+                    copy($artranBackupPath, $artranPath);
+                    ProgressDisplay::info("✅ Artran DBF file restored from backup");
+                } catch (\Throwable $restoreError) {
+                    ProgressDisplay::error("❌ Failed to restore artran DBF file from backup: " . $restoreError->getMessage());
+                }
+            }
+            throw $e;
+        } finally {
+            // ✅ Always release lock
+            if (isset($artranLockFp) && $artranLockFp !== null) {
+                releaseDbfLock($artranLockFp);
             }
         }
+
     } catch (\Throwable $e) {
         ProgressDisplay::error("❌ Error in recalculateArtranTotals: " . $e->getMessage());
     }
