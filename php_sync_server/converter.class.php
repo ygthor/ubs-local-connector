@@ -114,7 +114,7 @@ class Converter
                 'CONTACT'    => 'contact_person',
                 'E_MAIL'     => 'email',
                 'CT_GROUP'   => 'customer_group',
-                'CUST_TYPE'  => 'customer_type',
+                'REGION'  => 'customer_type',
                 'BUSINESS'   => 'segment',
                 'TERM'       => 'payment_type',
                 'TERM_IN_M'  => 'payment_term',
