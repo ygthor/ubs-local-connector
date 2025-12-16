@@ -655,25 +655,12 @@ def test_server_response():
 
 def sync_to_server(filename, data, directory):
     """
-    Sync data to remote server/UBS.
-    Automatically skips DO type orders (DO normally only insert from UBS to server, not synced back).
+    Sync data to remote server.
+    ✅ FIX: DO type orders should sync FROM UBS TO server (not skipped).
+    DO orders are only inserted from UBS to server, not synced back from server to UBS.
     """
-    # Filter out DO type orders for artran (for remote sync to UBS)
-    if filename.lower() == 'artran.dbf' and data and data.get('rows'):
-        original_count = len(data['rows'])
-        filtered_rows = []
-        do_skipped = 0
-        
-        for row in data['rows']:
-            type_value = str(row.get('TYPE', '')).strip().upper()
-            if type_value == 'DO':
-                do_skipped += 1
-                continue
-            filtered_rows.append(row)
-        
-        if do_skipped > 0:
-            print(f"⏭️  Skipped {do_skipped:,} DO type orders when syncing to remote (DO normally only insert from UBS to server)", flush=True)
-            data['rows'] = filtered_rows
+    # ✅ FIX: DO type orders should sync TO server (not filtered out)
+    # The filtering in main.py handles INV date filtering, but DO should always sync to server
     
     url = os.getenv("SERVER_URL") + "/api/sync/local"
     try:

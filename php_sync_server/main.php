@@ -73,6 +73,16 @@ try {
     // ProgressDisplay::info("Last sync time: $last_synced_at");
     // ProgressDisplay::info("Memory limit set to: " . ini_get('memory_limit'));
     
+    // ✅ Clean up orders with 0 order_items BEFORE sync starts
+    // These orphaned orders don't need to be synced
+    // Only delete orders within the sync date range
+    try {
+        deleteOrdersWithNoItems($last_synced_at, $resync_date, $resync_mode);
+    } catch (Exception $e) {
+        ProgressDisplay::warning("⚠️  Could not clean up orders with no items: " . $e->getMessage());
+        // Continue with sync even if cleanup fails
+    }
+    
     $ubsTables = Converter::ubsTable();
     $totalTables = count($ubsTables);
     

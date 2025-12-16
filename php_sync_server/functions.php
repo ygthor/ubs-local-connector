@@ -3341,6 +3341,91 @@ function linkCustomersToUsers($db_remote = null)
 }
 
 /**
+ * Delete orders with 0 order_items from remote server
+ * This should be called BEFORE sync starts to clean up orphaned orders
+ * Only deletes orders within the sync date range
+ * 
+ * @param string|null $last_synced_at Last sync timestamp (for normal sync mode)
+ * @param string|null $resync_date Resync date in YYYY-MM-DD format (for resync mode)
+ * @param bool $resync_mode Whether we're in resync mode
+ * @return int Number of orders deleted
+ */
+function deleteOrdersWithNoItems($last_synced_at = null, $resync_date = null, $resync_mode = false)
+{
+    try {
+        ProgressDisplay::info("🧹 Cleaning up orders with 0 order_items (based on sync date)...");
+        
+        $db_remote = new mysql();
+        $db_remote->connect_remote();
+        
+        // Start transaction
+        $db_remote->query("START TRANSACTION");
+        
+        // Build date filter based on sync mode
+        $dateFilter = "";
+        if ($resync_mode && $resync_date) {
+            // Resync mode: Filter by exact date
+            $escaped_date = $db_remote->escape($resync_date);
+            $dateFilter = "AND (DATE(o.order_date) = '$escaped_date' OR DATE(o.created_at) = '$escaped_date' OR DATE(o.updated_at) = '$escaped_date')";
+        } elseif ($last_synced_at) {
+            // Normal sync mode: Filter by last sync time
+            $escaped_date = $db_remote->escape($last_synced_at);
+            $dateFilter = "AND (o.order_date > '$escaped_date' OR o.created_at > '$escaped_date' OR o.updated_at > '$escaped_date')";
+        }
+        // If no date filter, don't delete anything (safety measure)
+        if (empty($dateFilter)) {
+            ProgressDisplay::info("⚠️  No sync date provided, skipping cleanup to prevent deleting all orders");
+            $db_remote->query("ROLLBACK");
+            $db_remote->close();
+            return 0;
+        }
+        
+        // Delete orders that have no order_items and match the date filter
+        // Use LEFT JOIN to find orders without any matching order_items
+        $deleteSql = "
+            DELETE o FROM orders o
+            LEFT JOIN order_items oi ON o.reference_no = oi.reference_no
+            WHERE oi.reference_no IS NULL
+            $dateFilter
+        ";
+        
+        $db_remote->query($deleteSql);
+        
+        if ($db_remote->getError()) {
+            throw new Exception("Failed to delete orders with no items: " . $db_remote->getError());
+        }
+        
+        $deletedCount = $db_remote->getAffectedRows();
+        
+        // Commit transaction
+        $db_remote->query("COMMIT");
+        $db_remote->close();
+        
+        if ($deletedCount > 0) {
+            $dateInfo = $resync_mode ? "for date $resync_date" : "after $last_synced_at";
+            ProgressDisplay::info("✅ Deleted $deletedCount order(s) with 0 order_items $dateInfo");
+        } else {
+            ProgressDisplay::info("✅ No orders with 0 order_items to clean up");
+        }
+        
+        return $deletedCount;
+    } catch (Exception $e) {
+        // Rollback on error
+        if (isset($db_remote) && $db_remote) {
+            try {
+                $db_remote->query("ROLLBACK");
+                $db_remote->close();
+            } catch (Exception $rollbackError) {
+                // Ignore rollback errors
+            }
+        }
+        ProgressDisplay::warning("⚠️  Could not delete orders with no items: " . $e->getMessage());
+        // Don't fail the entire sync if cleanup fails
+        return 0;
+    }
+}
+
+/**
  * Validate and clean up duplicate orders and order_items
  * This function should be called after sync completes to ensure no duplicates exist
  * 

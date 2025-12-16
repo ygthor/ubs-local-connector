@@ -106,8 +106,8 @@ def sync_all():
                 original_record_count = len(data['rows'])
                 print(f"📊 Read {original_record_count:,} records from {file_name}", flush=True)
                 
-                # Filter artran: Skip all DO type orders (DO orders are only inserted from UBS to server, not synced back)
-                # - Skip ALL DO type orders (for remote sync to UBS - DO normally only insert from UBS to server)
+                # Filter artran: 
+                # - DO type orders: KEEP ALL (DO should sync FROM UBS TO server)
                 # - INV with DATE <= 2025-12-12: Skip ALL
                 # - INV with DATE > 2025-12-12: Keep ALL (future dates allowed)
                 # - Other types: Keep ALL
@@ -117,18 +117,13 @@ def sync_all():
                     original_count = len(data['rows'])
                     
                     filtered_records = []
-                    do_skipped_count = 0
                     inv_skipped_count = 0
                     
                     for row in data['rows']:
                         date_value = row.get('DATE')
                         type_value = str(row.get('TYPE', '')).strip().upper()
                         
-                        # Skip ALL DO type orders (for remote sync to UBS)
-                        if type_value == 'DO':
-                            do_skipped_count += 1
-                            continue
-                        
+                        # ✅ FIX: DO type orders should sync FROM UBS TO server (not skipped)
                         # Skip INV with date <= 2025-12-12
                         if type_value == 'INV':
                             date_str = None
@@ -151,20 +146,18 @@ def sync_all():
                                 inv_skipped_count += 1
                                 continue
                         
-                        # Keep all other records (INV with date > 2025-12-12, other types, etc.)
+                        # Keep all records (DO, INV with date > 2025-12-12, other types, etc.)
                         filtered_records.append(row)
                     
                     data['rows'] = filtered_records
                     filtered_count = len(filtered_records)
                     skipped_count = original_count - filtered_count
                     
-                    if do_skipped_count > 0:
-                        print(f"⏭️  Skipped {do_skipped_count:,} DO type orders (DO normally only insert from UBS to server)", flush=True)
                     if inv_skipped_count > 0:
                         print(f"⏭️  Skipped {inv_skipped_count:,} INV records with date <= 2025-12-12", flush=True)
                     if skipped_count > 0:
                         print(f"⏭️  Total filtered: {skipped_count:,} record(s) ({filtered_count:,} remaining)", flush=True)
-                    print(f"✅ Filtering complete: {filtered_count:,} records to sync", flush=True)
+                    print(f"✅ Filtering complete: {filtered_count:,} records to sync (DO orders included)", flush=True)
                 
                 # Filter ictran: Keep all records
                 # Orphaned items (where parent order was deleted) will be cleaned up by database cleanup script
