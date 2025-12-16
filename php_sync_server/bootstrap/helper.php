@@ -393,6 +393,10 @@ function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null, $resyncDate 
         
         $is_composite_key = is_array($remote_key);
         
+        // ✅ SAFER: For orders (artran), we need to filter out orders without items
+        // Build the base SQL with JOIN for orders, or standard SQL for other tables
+        $isArtran = ($table === 'ubs_ubsstk2015_artran');
+        
         if ($is_composite_key) {
             // Handle composite keys (e.g., REFNO + ITEMCOUNT)
             // Keys are in format "key1|key2"
@@ -412,7 +416,16 @@ function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null, $resyncDate 
                 return [];
             }
             
-            $sql = "SELECT * FROM `$remote_table_name` WHERE " . implode(' OR ', $conditions);
+            if ($isArtran) {
+                // For orders: Add JOIN with order_items to filter out orders without items
+                // Use GROUP BY to avoid duplicate orders when order has multiple items
+                $sql = "SELECT o.* FROM `$remote_table_name` o 
+                       INNER JOIN order_items oi ON o.reference_no = oi.reference_no 
+                       WHERE " . implode(' OR ', $conditions) . "
+                       GROUP BY o.reference_no";
+            } else {
+                $sql = "SELECT * FROM `$remote_table_name` WHERE " . implode(' OR ', $conditions);
+            }
         } else {
             // Handle simple keys
             $escaped_keys = array_map(function($key) use ($db) {
@@ -420,13 +433,24 @@ function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null, $resyncDate 
             }, $keys);
             
             $keys_str = implode(',', $escaped_keys);
-            $sql = "SELECT * FROM `$remote_table_name` WHERE `$remote_key` IN ($keys_str)";
+            
+            if ($isArtran) {
+                // For orders: Add JOIN with order_items to filter out orders without items
+                // Use GROUP BY to avoid duplicate orders when order has multiple items
+                $sql = "SELECT o.* FROM `$remote_table_name` o 
+                       INNER JOIN order_items oi ON o.reference_no = oi.reference_no 
+                       WHERE o.`$remote_key` IN ($keys_str)
+                       GROUP BY o.reference_no";
+            } else {
+                $sql = "SELECT * FROM `$remote_table_name` WHERE `$remote_key` IN ($keys_str)";
+            }
         }
         
         // Resync mode: Filter by DATE(created_at) = date OR DATE(updated_at) = date
         if ($resyncDate) {
-            if ($table === 'ubs_ubsstk2015_artran') {
-                $sql .= " AND (DATE(created_at) = '" . $db->escape($resyncDate) . "' OR DATE(updated_at) = '" . $db->escape($resyncDate) . "' OR DATE(order_date) = '" . $db->escape($resyncDate) . "')";
+            if ($isArtran) {
+                // ✅ SAFER: JOIN already added in base SQL, just add date filter
+                $sql .= " AND (DATE(o.created_at) = '" . $db->escape($resyncDate) . "' OR DATE(o.updated_at) = '" . $db->escape($resyncDate) . "' OR DATE(o.order_date) = '" . $db->escape($resyncDate) . "')";
             } elseif ($table === 'ubs_ubsstk2015_ictran') {
                 // Need to join with orders table to check order_date
                 if (strpos($sql, "FROM `$remote_table_name` WHERE") !== false) {
@@ -448,9 +472,10 @@ function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null, $resyncDate 
         else {
             // For artran (orders): Check both updated_at AND order_date to catch recent orders
             // This ensures orders with recent order_date but old updated_at are still synced
-            if ($table === 'ubs_ubsstk2015_artran') {
+            // ✅ SAFER: JOIN already added in base SQL, just add date filter if needed
+            if ($isArtran) {
                 if ($updatedAfter) {
-                    $sql .= " AND (`$column_updated_at` > '" . $db->escape($updatedAfter) . "' OR order_date > '" . $db->escape($updatedAfter) . "')";
+                    $sql .= " AND (o.`$column_updated_at` > '" . $db->escape($updatedAfter) . "' OR o.order_date > '" . $db->escape($updatedAfter) . "')";
                 }
             }
             // For ictran (order_items): Check both updated_at AND parent order's order_date

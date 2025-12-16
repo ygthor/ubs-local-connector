@@ -73,15 +73,18 @@ try {
     // ProgressDisplay::info("Last sync time: $last_synced_at");
     // ProgressDisplay::info("Memory limit set to: " . ini_get('memory_limit'));
     
-    // ✅ Clean up orders with 0 order_items BEFORE sync starts
-    // These orphaned orders don't need to be synced
-    // Only delete orders within the sync date range
-    try {
-        deleteOrdersWithNoItems($last_synced_at, $resync_date, $resync_mode);
-    } catch (Exception $e) {
-        ProgressDisplay::warning("⚠️  Could not clean up orders with no items: " . $e->getMessage());
-        // Continue with sync even if cleanup fails
-    }
+    // ✅ SAFER APPROACH: Skip orders without items from syncing to UBS instead of deleting them
+    // This prevents race conditions where orders are being created while sync is running
+    // Orders without items will simply not be synced to UBS, and will be synced automatically
+    // once items are added in the next sync run
+    // 
+    // The filtering is done in:
+    // 1. fetchRemoteDataByKeys() - filters orders without items when fetching by keys
+    // 2. Remote data queries in main sync loop - filters orders without items
+    // 
+    // OLD APPROACH (commented out for safety):
+    // deleteOrdersWithNoItems($last_synced_at, $resync_date, $resync_mode);
+    ProgressDisplay::info("ℹ️  Using safer approach: Orders without items will be skipped from sync (not deleted)");
     
     $ubsTables = Converter::ubsTable();
     $totalTables = count($ubsTables);
@@ -192,12 +195,20 @@ try {
                     $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
                     
                     if ($isForceSync) {
-                        $countSql = "SELECT COUNT(*) as total FROM $remote_table_name";
+                        // ✅ SAFER: Only count orders that have at least one order_item
+                        if ($isArtran) {
+                            $countSql = "SELECT COUNT(DISTINCT o.reference_no) as total FROM $remote_table_name o
+                                        INNER JOIN order_items oi ON o.reference_no = oi.reference_no";
+                        } else {
+                            $countSql = "SELECT COUNT(*) as total FROM $remote_table_name";
+                        }
                     } elseif ($resync_mode && $resync_date) {
                         // Resync mode: Check DATE(created_at) = date OR DATE(updated_at) = date
+                        // ✅ SAFER: Only count orders that have at least one order_item
                         if ($isArtran) {
-                            $countSql = "SELECT COUNT(*) as total FROM $remote_table_name 
-                                        WHERE (DATE(created_at) = '$resync_date' OR DATE(updated_at) = '$resync_date' OR DATE(order_date) = '$resync_date')";
+                            $countSql = "SELECT COUNT(DISTINCT o.reference_no) as total FROM $remote_table_name o
+                                        INNER JOIN order_items oi ON o.reference_no = oi.reference_no
+                                        WHERE (DATE(o.created_at) = '$resync_date' OR DATE(o.updated_at) = '$resync_date' OR DATE(o.order_date) = '$resync_date')";
                         } elseif ($isIctran) {
                             $countSql = "SELECT COUNT(*) as total FROM $remote_table_name oi
                                         INNER JOIN orders o ON oi.reference_no = o.reference_no
@@ -208,8 +219,10 @@ try {
                         }
                     } elseif ($isArtran) {
                         // For artran (orders): Check both updated_at AND order_date to catch recent orders
-                        $countSql = "SELECT COUNT(*) as total FROM $remote_table_name 
-                                    WHERE ($column_updated_at > '$last_synced_at' OR order_date > '$last_synced_at')";
+                        // ✅ SAFER: Only count orders that have at least one order_item
+                        $countSql = "SELECT COUNT(DISTINCT o.reference_no) as total FROM $remote_table_name o
+                                    INNER JOIN order_items oi ON o.reference_no = oi.reference_no
+                                    WHERE (o.$column_updated_at > '$last_synced_at' OR o.order_date > '$last_synced_at')";
                     } elseif ($isIctran) {
                         // For ictran (order_items): Check both updated_at AND parent order's order_date
                         $countSql = "SELECT COUNT(*) as total FROM $remote_table_name oi
@@ -221,8 +234,14 @@ try {
                     $remoteCount = $db_remote_check->first($countSql)['total'] ?? 0;
                     
                     // For artran/ictran/customers, also check total count if no recent updates (when UBS is empty)
+                    // ✅ SAFER: Only count orders that have at least one order_item
                     if ($needsEmptyUbsCheck && $ubsCount == 0 && $remoteCount == 0) {
-                        $totalRemoteSql = "SELECT COUNT(*) as total FROM $remote_table_name";
+                        if ($isArtran) {
+                            $totalRemoteSql = "SELECT COUNT(DISTINCT o.reference_no) as total FROM $remote_table_name o
+                                             INNER JOIN order_items oi ON o.reference_no = oi.reference_no";
+                        } else {
+                            $totalRemoteSql = "SELECT COUNT(*) as total FROM $remote_table_name";
+                        }
                         $totalRemoteCount = $db_remote_check->first($totalRemoteSql)['total'] ?? 0;
                         if ($totalRemoteCount > 0) {
                             if ($isArtran) {
@@ -298,9 +317,12 @@ try {
                     // ✅ FIX: When UBS is empty, fetch ALL remote records (not just recent ones)
                     // This ensures customers with old updated_at values are still synced to DBF
                     // For artran/ictran: Also check order_date to catch recent orders
+                    // ✅ SAFER: Only sync orders that have at least one order_item to prevent race conditions
                     if ($isArtran) {
-                        $allRemoteSql = "SELECT * FROM $remote_table_name 
-                                        WHERE ($column_updated_at > '$last_synced_at' OR order_date > '$last_synced_at')";
+                        $allRemoteSql = "SELECT o.* FROM $remote_table_name o
+                                        INNER JOIN order_items oi ON o.reference_no = oi.reference_no
+                                        WHERE (o.$column_updated_at > '$last_synced_at' OR o.order_date > '$last_synced_at')
+                                        GROUP BY o.reference_no";
                     } elseif ($isIctran) {
                         $allRemoteSql = "SELECT oi.* FROM $remote_table_name oi
                                        INNER JOIN orders o ON oi.reference_no = o.reference_no
@@ -534,9 +556,12 @@ try {
                     $column_updated_at = Converter::mapUpdatedAtField($remote_table_name);
                     
                     // Fetch remote records that should be synced (check both updated_at and order_date)
+                    // ✅ SAFER: Only sync orders that have at least one order_item to prevent race conditions
                     if ($isArtran) {
-                        $missingRemoteSql = "SELECT * FROM $remote_table_name 
-                                           WHERE ($column_updated_at > '$last_synced_at' OR order_date > '$last_synced_at')";
+                        $missingRemoteSql = "SELECT o.* FROM $remote_table_name o
+                                           INNER JOIN order_items oi ON o.reference_no = oi.reference_no
+                                           WHERE (o.$column_updated_at > '$last_synced_at' OR o.order_date > '$last_synced_at')
+                                           GROUP BY o.reference_no";
                     } elseif ($isIctran) {
                         $missingRemoteSql = "SELECT oi.* FROM $remote_table_name oi
                                            INNER JOIN orders o ON oi.reference_no = o.reference_no
