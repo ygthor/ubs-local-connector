@@ -106,6 +106,7 @@ class Converter
                 'ADD1'       => 'address1', // overwritten from 'address1'
                 'ADD2'       => 'address2',
                 'ADD3'       => 'address3',
+                'ADD4'       => 'address4',
                 'POSTCODE'   => 'postcode',
                 'STATE'      => 'state',
                 'AREA'       => 'territory',

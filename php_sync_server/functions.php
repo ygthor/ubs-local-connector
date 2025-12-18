@@ -1751,9 +1751,16 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
     $map = Converter::mapColumns($remote_table_name);
 
+    // ✅ FIX: When map is empty (like icitem), include ALL fields from dataRow
+    // This ensures price fields (PRICE, UCOST, PRICEU2, etc.) are synced
     if ($map == []) {
-        return $dataRow; // no need convert
-    }
+        // For empty maps, copy all fields from dataRow to converted
+        // This ensures all fields including price fields are included in sync
+        foreach ($dataRow as $field => $value) {
+            $converted[$field] = $value;
+        }
+        // Continue processing to handle timestamps and field cleanup
+    } else {
 
     // Apply explicit mappings
     foreach ($map as $ubs => $remote) {
@@ -1774,27 +1781,28 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
         }
     }
 
-    // Auto-map: Include fields with identical names that aren't explicitly mapped
-    // This handles fields like CREATED_ON, UPDATED_ON that have same name in both tables
-    if ($direction === 'to_remote') {
-        $mappedUbsFields = array_keys($map);
-        $mappedRemoteFields = array_values(array_filter($map, function ($v) {
-            return $v !== null;
-        }));
+        // Auto-map: Include fields with identical names that aren't explicitly mapped
+        // This handles fields like CREATED_ON, UPDATED_ON that have same name in both tables
+        if ($direction === 'to_remote') {
+            $mappedUbsFields = array_keys($map);
+            $mappedRemoteFields = array_values(array_filter($map, function ($v) {
+                return $v !== null;
+            }));
 
-        foreach ($dataRow as $ubsField => $value) {
-            // Auto-map if: not in map, not already converted, and field name matches remote column naming
-            if (!in_array($ubsField, $mappedUbsFields) && !isset($converted[$ubsField])) {
-                // Common fields that should auto-map (same name in both tables)
-                // Note: CREATED_BY and UPDATED_BY are excluded as they may not exist in all remote tables
-                // Note: 'id' is excluded because remote tables use auto-increment ID that shouldn't be set manually
-                $autoMapFields = ['CREATED_ON', 'UPDATED_ON'];
-                if (in_array(strtoupper($ubsField), array_map('strtoupper', $autoMapFields))) {
-                    $converted[$ubsField] = $value;
+            foreach ($dataRow as $ubsField => $value) {
+                // Auto-map if: not in map, not already converted, and field name matches remote column naming
+                if (!in_array($ubsField, $mappedUbsFields) && !isset($converted[$ubsField])) {
+                    // Common fields that should auto-map (same name in both tables)
+                    // Note: CREATED_BY and UPDATED_BY are excluded as they may not exist in all remote tables
+                    // Note: 'id' is excluded because remote tables use auto-increment ID that shouldn't be set manually
+                    $autoMapFields = ['CREATED_ON', 'UPDATED_ON'];
+                    if (in_array(strtoupper($ubsField), array_map('strtoupper', $autoMapFields))) {
+                        $converted[$ubsField] = $value;
+                    }
                 }
             }
         }
-    }
+    } // End of else block for when map is not empty
 
     // Validate and fix UPDATED_ON/updated_at field in converted data
     $updatedAtValue = null;
