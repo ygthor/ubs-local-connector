@@ -198,17 +198,15 @@ class Converter
             ],
 
             'icitem' => [
-                // Ensure all fields from Icitem model are explicitly mapped
-                // This makes sure all fields including UNIT, QTY, TYPE, etc. are synced
+                // Map only fields that exist in both UBS DBF and remote database table
+                // Only include columns that exist in the remote icitem table
                 'ITEMNO' => 'ITEMNO',
-                'TYPE' => 'TYPE',
                 'CATEGORY' => 'CATEGORY',
                 'GROUP' => 'GROUP',
                 'DESP' => 'DESP',
-                'UNIT' => 'UNIT',           // Critical: Unit of measurement
+                'UNIT' => 'UNIT',
                 'UCOST' => 'UCOST',
                 'PRICE' => 'PRICE',
-                'PRICE_BIL' => 'PRICE_BIL',
                 'UNIT2' => 'UNIT2',
                 'QTYBF' => 'QTYBF',
                 'FACTOR1' => 'FACTOR1',
@@ -216,8 +214,7 @@ class Converter
                 'PRICEU2' => 'PRICEU2',
                 'PRICEU3' => 'PRICEU3',
                 'T_UCOST' => 'T_UCOST',
-                'QTY' => 'QTY',             // Critical: Stock quantity
-                'COST' => 'COST',
+                'QTY' => 'QTY',
                 'CREATED_BY' => 'CREATED_BY',
                 'CREATED_ON' => 'CREATED_ON',
                 'UPDATED_BY' => 'UPDATED_BY',

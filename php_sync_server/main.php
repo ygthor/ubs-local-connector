@@ -86,47 +86,6 @@ try {
     // deleteOrdersWithNoItems($last_synced_at, $resync_date, $resync_mode);
     ProgressDisplay::info("ℹ️  Using safer approach: Orders without items will be skipped from sync (not deleted)");
     
-    // Initialize sync tracking variables
-    $processedTables = 0;
-    $syncResults = []; // Track sync results for each table
-    $tableStats = []; // Track insert/update statistics per table
-    
-    // ✅ SYNC ICITEM AND ICGROUP FIRST (Force sync - all records)
-    // These are master data tables that need to be synced completely every time
-    try {
-        ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        ProgressDisplay::info("📦 Step 1: Syncing icitem and icgroup (master data - force sync all records)");
-        ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        
-        $icitemResult = syncIcitemAndIcgroup();
-        
-        ProgressDisplay::info("✅ icitem & icgroup sync completed:");
-        ProgressDisplay::info("   - icitem records: " . $icitemResult['icitem_count']);
-        ProgressDisplay::info("   - icgroup records: " . $icitemResult['icgroup_count']);
-        
-        // Add to sync results
-        $syncResults[] = [
-            'table' => 'ubs_ubsstk2015_icitem',
-            'ubs_count' => $icitemResult['icitem_count'],
-            'remote_count' => $icitemResult['icitem_count'],
-            'processed_records' => $icitemResult['icitem_count']
-        ];
-        $syncResults[] = [
-            'table' => 'ubs_ubsstk2015_icgroup',
-            'ubs_count' => $icitemResult['icgroup_count'],
-            'remote_count' => $icitemResult['icgroup_count'],
-            'processed_records' => $icitemResult['icgroup_count']
-        ];
-        
-    } catch (Exception $e) {
-        ProgressDisplay::error("❌ Error syncing icitem and icgroup: " . $e->getMessage());
-        // Continue with other tables even if icitem/icgroup sync fails
-    }
-    
-    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    ProgressDisplay::info("📦 Step 2: Syncing other tables");
-    ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    
     $ubsTables = Converter::ubsTable();
     $totalTables = count($ubsTables);
     
@@ -137,13 +96,11 @@ try {
         ProgressDisplay::info("🕐 Syncing records updated after: $last_synced_at");
     }
     
+    $processedTables = 0;
+    $syncResults = []; // Track sync results for each table
+    $tableStats = []; // Track insert/update statistics per table
+    
     foreach($ubsTables as $ubs_table) {
-        // ✅ Skip icitem and icgroup - already synced above with force sync
-        if ($ubs_table === 'ubs_ubsstk2015_icitem' || $ubs_table === 'ubs_ubsstk2015_icgroup') {
-            ProgressDisplay::info("⏭️  Skipping $ubs_table (already synced with force sync above)");
-            continue;
-        }
-        
         $remote_table_name = Converter::table_convert_remote($ubs_table);
         
         $processedTables++;
