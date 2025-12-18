@@ -197,6 +197,22 @@ class Converter
                 'UPDATED_ON' => 'UPDATED_ON',
             ],
 
+            'icitem' => [
+                // Ensure price-related fields from UBS are explicitly mapped
+                // This makes sure PRICE, UCOST and related fields are written to remote table
+                'ITEMNO' => 'ITEMNO',
+                'DESP' => 'DESP',
+                'GROUP' => 'GROUP',
+                'PRICE' => 'PRICE',
+                'PRICE_BIL' => 'PRICE_BIL',
+                'PRICEU2' => 'PRICEU2',
+                'PRICEU3' => 'PRICEU3',
+                'UCOST' => 'UCOST',
+                'COST' => 'COST',
+                'CREATED_ON' => 'CREATED_ON',
+                'UPDATED_ON' => 'UPDATED_ON',
+            ],
+
             // auto map if identical
 
         ];
