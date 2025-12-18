@@ -1751,16 +1751,14 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
     $map = Converter::mapColumns($remote_table_name);
 
-    // Special handling for customers: Transform POSTCODE before mapping
+    // Special handling for customers: Extract postcode and state from ADD4 only
+    // ⚠️ CRITICAL: POSTCODE and STATE fields from UBS are NEVER synced - only ADD4 is used
+    // POSTCODE and STATE are intentionally NOT mapped (commented out in converter.class.php)
     if ($remote_table_name === 'customers' && $direction === 'to_remote') {
-        // Split POSTCODE into postcode and state before mapping
-        if (isset($dataRow['POSTCODE']) && !empty($dataRow['POSTCODE'])) {
-            $parts = Converter::splitPostcodeState($dataRow['POSTCODE']);
-            $dataRow['postcode'] = $parts['postcode'];
-            $dataRow['state'] = $parts['state'];
-        }
-        // Remove ADD4 since it will be auto-generated in backend
-        unset($dataRow['ADD4']);
+        // Do NOT process POSTCODE or STATE fields - they are not synced
+        // Only ADD4 will be processed in the mapping loop below to extract postcode and state
+        // Remove ADD4 from dataRow since it will be handled in the mapping loop
+        // (Actually, don't unset it - let the mapping loop handle it)
     }
 
     // ✅ FIX: When map is empty (like icitem), include ALL fields from dataRow
@@ -1780,6 +1778,7 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             // Skip null mappings (fields to ignore, like SALEC)
             if ($remote !== null && $ubs !== null) {
                 // Special handling for ADD4 in customers: extract postcode and state from ADD4
+                // ⚠️ CRITICAL: Only use ADD4 - POSTCODE and STATE fields are NEVER synced from UBS
                 if ($remote_table_name === 'customers' && $ubs === 'ADD4') {
                     // Map ADD4 to address4
                     $converted['address4'] = $dataRow['ADD4'] ?? null;
