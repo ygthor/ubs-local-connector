@@ -91,9 +91,10 @@ def sync_all():
                     print(status_message, flush=True)
                 
                 print(f"🔍 Reading DBF file: {file_name}...", flush=True)
-                # Skip records before 2025-12-01 ONLY for icitem and ictran (performance optimization)
+                # Skip records before 2025-12-01 ONLY for ictran (performance optimization)
+                # ⚠️ CRITICAL: icitem is MASTER DATA - do NOT filter by date! All items must sync.
                 skip_before_date = None
-                if dbf_name in ['icitem', 'ictran']:
+                if dbf_name == 'ictran':
                     skip_before_date = os.getenv("SKIP_BEFORE_DATE", "20251201")  # Default: 2025-12-01
                     print(f"📅 Date filtering enabled for {dbf_name}: Skipping records before {skip_before_date}", flush=True)
                 data = read_dbf(full_path, progress_callback=progress_callback, skip_before_date=skip_before_date)

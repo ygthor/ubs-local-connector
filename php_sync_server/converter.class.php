@@ -198,18 +198,29 @@ class Converter
             ],
 
             'icitem' => [
-                // Ensure price-related fields from UBS are explicitly mapped
-                // This makes sure PRICE, UCOST and related fields are written to remote table
+                // Ensure all fields from Icitem model are explicitly mapped
+                // This makes sure all fields including UNIT, QTY, TYPE, etc. are synced
                 'ITEMNO' => 'ITEMNO',
-                'DESP' => 'DESP',
+                'TYPE' => 'TYPE',
+                'CATEGORY' => 'CATEGORY',
                 'GROUP' => 'GROUP',
+                'DESP' => 'DESP',
+                'UNIT' => 'UNIT',           // Critical: Unit of measurement
+                'UCOST' => 'UCOST',
                 'PRICE' => 'PRICE',
                 'PRICE_BIL' => 'PRICE_BIL',
+                'UNIT2' => 'UNIT2',
+                'QTYBF' => 'QTYBF',
+                'FACTOR1' => 'FACTOR1',
+                'FACTOR2' => 'FACTOR2',
                 'PRICEU2' => 'PRICEU2',
                 'PRICEU3' => 'PRICEU3',
-                'UCOST' => 'UCOST',
+                'T_UCOST' => 'T_UCOST',
+                'QTY' => 'QTY',             // Critical: Stock quantity
                 'COST' => 'COST',
+                'CREATED_BY' => 'CREATED_BY',
                 'CREATED_ON' => 'CREATED_ON',
+                'UPDATED_BY' => 'UPDATED_BY',
                 'UPDATED_ON' => 'UPDATED_ON',
             ],
 
