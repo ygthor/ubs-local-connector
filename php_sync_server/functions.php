@@ -1794,6 +1794,9 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                         $converted['postcode'] = null;
                         $converted['state'] = null;
                     }
+                }elseif ($remote_table_name === 'customers' && $ubs === 'NAME2') {
+                    $converted['name'] = $dataRow['NAME2'];
+                    $converted['company_name2'] = $dataRow['NAME2'];
                 }
                 else {
                     $converted[$remote] = $dataRow[$ubs] ?? null;
