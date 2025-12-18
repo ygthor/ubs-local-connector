@@ -102,7 +102,7 @@ class Converter
                 // UBS => REMOTE
                 'CUSTNO'     => 'customer_code',
                 'NAME'       => 'company_name',
-                'NAME2'      => 'name',
+                'NAME2'      => 'company_name2',
                 'ADD1'       => 'address1', // overwritten from 'address1'
                 'ADD2'       => 'address2',
                 'ADD3'       => 'address3',
