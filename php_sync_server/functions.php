@@ -1751,6 +1751,18 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
     $map = Converter::mapColumns($remote_table_name);
 
+    // Special handling for customers: Transform POSTCODE before mapping
+    if ($remote_table_name === 'customers' && $direction === 'to_remote') {
+        // Split POSTCODE into postcode and state before mapping
+        if (isset($dataRow['POSTCODE']) && !empty($dataRow['POSTCODE'])) {
+            $parts = Converter::splitPostcodeState($dataRow['POSTCODE']);
+            $dataRow['postcode'] = $parts['postcode'];
+            $dataRow['state'] = $parts['state'];
+        }
+        // Remove ADD4 since it will be auto-generated in backend
+        unset($dataRow['ADD4']);
+    }
+
     // ✅ FIX: When map is empty (like icitem), include ALL fields from dataRow
     // This ensures price fields (PRICE, UCOST, PRICEU2, etc.) are synced
     if ($map == []) {
@@ -1767,7 +1779,26 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
         if ($direction === 'to_remote') {
             // Skip null mappings (fields to ignore, like SALEC)
             if ($remote !== null && $ubs !== null) {
-                $converted[$remote] = $dataRow[$ubs] ?? null;
+                // Special handling for ADD4 in customers: extract postcode and state from ADD4
+                if ($remote_table_name === 'customers' && $ubs === 'ADD4') {
+                    // Map ADD4 to address4
+                    $converted['address4'] = $dataRow['ADD4'] ?? null;
+                    
+                    // Extract postcode and state from ADD4 (ADD4 contains "postcode state")
+                    // Example: "81100 JHR" => postcode: "81100", state: "JHR"
+                    if (isset($dataRow['ADD4']) && !empty(trim($dataRow['ADD4']))) {
+                        $parts = Converter::splitPostcodeState($dataRow['ADD4']);
+                        $converted['postcode'] = $parts['postcode'];
+                        $converted['state'] = $parts['state'];
+                    } else {
+                        // If ADD4 is empty, set postcode and state to empty
+                        $converted['postcode'] = null;
+                        $converted['state'] = null;
+                    }
+                }
+                else {
+                    $converted[$remote] = $dataRow[$ubs] ?? null;
+                }
             }
         } else {
             if ($ubs && $remote) {
@@ -1860,6 +1891,13 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
         }
         // Also remove any other remote-only fields that might slip through
         unset($converted['id']); // Remote auto-increment ID doesn't exist in UBS
+
+        // Special handling for customers: ADD4 is already mapped from address4
+        // POSTCODE and STATE are NOT synced, so no additional processing needed
+        if ($remote_table_name === 'customers') {
+            // ADD4 is already mapped from address4 in the mapping loop above
+            // POSTCODE and STATE are not synced, so we don't need to combine them
+        }
     }
 
     if ($direction == 'to_remote') {

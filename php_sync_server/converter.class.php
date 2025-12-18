@@ -106,9 +106,9 @@ class Converter
                 'ADD1'       => 'address1', // overwritten from 'address1'
                 'ADD2'       => 'address2',
                 'ADD3'       => 'address3',
-                'ADD4'       => 'address4',
-                'POSTCODE'   => 'postcode',
-                'STATE'      => 'state',
+                'ADD4'       => 'address4', // and extract to postcode , state
+                // 'POSTCODE'   => 'postcode',
+                // 'STATE'      => 'state',
                 'AREA'       => 'territory',
                 'PHONE'      => 'telephone1', // overwritten from 'telephone1'
                 'PHONEA'     => 'telephone2',
@@ -225,5 +225,85 @@ class Converter
         ];
 
         return $maps[$remote_table] ?? 'updated_at'; // default to 'updated_at'
+    }
+
+    /**
+     * Transform data from Local (UBS) to Remote format
+     * Handles special cases: Extract postcode and state from ADD4
+     * POSTCODE and STATE are NOT synced - only ADD4 is synced
+     */
+    static function transformToRemote($entity, $localData)
+    {
+        if ($entity !== 'customers') {
+            return $localData; // No special handling for other entities
+        }
+
+        $transformedData = $localData;
+
+        // Extract postcode and state from ADD4 (ADD4 contains "postcode state")
+        if (isset($localData['ADD4']) && !empty($localData['ADD4'])) {
+            $parts = self::splitPostcodeState($localData['ADD4']);
+            $transformedData['postcode'] = $parts['postcode'];
+            $transformedData['state'] = $parts['state'];
+        }
+
+        return $transformedData;
+    }
+
+    /**
+     * Transform data from Remote to Local (UBS) format
+     * Handles special cases: Set ADD4 from address4
+     * POSTCODE and STATE are NOT synced - only ADD4 is synced
+     */
+    static function transformToLocal($entity, $remoteData)
+    {
+        if ($entity !== 'customers') {
+            return $remoteData; // No special handling for other entities
+        }
+
+        $transformedData = $remoteData;
+
+        // ADD4 is already mapped from address4 in the mapping
+        // No additional transformation needed since POSTCODE and STATE are not synced
+
+        return $transformedData;
+    }
+
+    /**
+     * Split combined POSTCODE field into separate postcode and state
+     * Examples: "81100 JHR" => ['postcode' => '81100', 'state' => 'JHR']
+     *           "81100" => ['postcode' => '81100', 'state' => '']
+     */
+    static function splitPostcodeState($combined)
+    {
+        if (empty($combined)) {
+            return ['postcode' => '', 'state' => ''];
+        }
+
+        // Trim and split by space
+        $combined = trim($combined);
+        $parts = preg_split('/\s+/', $combined, 2);
+
+        return [
+            'postcode' => $parts[0] ?? '',
+            'state' => $parts[1] ?? ''
+        ];
+    }
+
+    /**
+     * Combine separate postcode and state into single POSTCODE field
+     * Examples: ('81100', 'JHR') => "81100 JHR"
+     *           ('81100', '') => "81100"
+     */
+    static function combinePostcodeState($postcode, $state)
+    {
+        $postcode = trim($postcode ?? '');
+        $state = trim($state ?? '');
+
+        if (empty($state)) {
+            return $postcode;
+        }
+
+        return $postcode . ' ' . $state;
     }
 }
