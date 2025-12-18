@@ -462,31 +462,42 @@ try {
                     }
                 }
                 
-                // Fetch only matching remote records for this chunk
-                $chunk_remote_data = [];
-                if (!empty($chunk_keys)) {
-                    $updatedAfter = $isForceSync ? null : $last_synced_at;
-                    // For artran/ictran, also check order_date (handled in fetchRemoteDataByKeys)
-                    // Pass resync_date if in resync mode
-                    $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, 
-                        ($resync_mode && $resync_date) ? null : $updatedAfter, 
-                        ($resync_mode && $resync_date) ? $resync_date : null);
-                }
-                
-                // ✅ FAST PATH: If no remote data, skip syncEntity (like main_init.php)
-                // This avoids expensive comparison when there's nothing to compare
-                if (empty($chunk_remote_data)) {
-                    // All UBS records need to sync to remote
+                // ✅ FORCE SYNC: For icitem and icgroup, always sync all records (no timestamp comparison)
+                // This ensures PRICE and other fields are always updated, even if UPDATED_ON timestamps are equal
+                if ($isForceSync) {
+                    // Force sync: Convert all UBS data to remote format and upsert (ignore remote data comparison)
                     $remote_data_to_upsert = [];
                     foreach ($ubs_data as $row) {
                         $remote_data_to_upsert[] = convert(Converter::table_convert_remote($ubs_table), $row, 'to_remote');
                     }
                     $ubs_data_to_upsert = [];
                 } else {
-                    // Compare with remote data
-                    $comparedData = syncEntity($ubs_table, $ubs_data, $chunk_remote_data);
-                    $remote_data_to_upsert = $comparedData['remote_data'];
-                    $ubs_data_to_upsert = $comparedData['ubs_data'];
+                    // Normal sync: Fetch remote data and compare
+                    $chunk_remote_data = [];
+                    if (!empty($chunk_keys)) {
+                        $updatedAfter = $last_synced_at;
+                        // For artran/ictran, also check order_date (handled in fetchRemoteDataByKeys)
+                        // Pass resync_date if in resync mode
+                        $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, 
+                            ($resync_mode && $resync_date) ? null : $updatedAfter, 
+                            ($resync_mode && $resync_date) ? $resync_date : null);
+                    }
+                    
+                    // ✅ FAST PATH: If no remote data, skip syncEntity (like main_init.php)
+                    // This avoids expensive comparison when there's nothing to compare
+                    if (empty($chunk_remote_data)) {
+                        // All UBS records need to sync to remote
+                        $remote_data_to_upsert = [];
+                        foreach ($ubs_data as $row) {
+                            $remote_data_to_upsert[] = convert(Converter::table_convert_remote($ubs_table), $row, 'to_remote');
+                        }
+                        $ubs_data_to_upsert = [];
+                    } else {
+                        // Compare with remote data
+                        $comparedData = syncEntity($ubs_table, $ubs_data, $chunk_remote_data);
+                        $remote_data_to_upsert = $comparedData['remote_data'];
+                        $ubs_data_to_upsert = $comparedData['ubs_data'];
+                    }
                 }
                 
                 // ✅ SAFE: Use transaction wrapper for data integrity
