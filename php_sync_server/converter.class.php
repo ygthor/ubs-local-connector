@@ -130,6 +130,7 @@ class Converter
             'orders' => [
                 'TYPE' => 'type',
                 'REFNO'       => 'reference_no', // key was empty
+                'REFNO2'       => 'credit_invoice_no', // 
                 'CUSTNO'      => 'customer_code', // link using customer id
                 'NAME' => 'customer_name',
                 'DATE'        => 'order_date',
