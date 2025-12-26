@@ -5,6 +5,15 @@ use XBase\DataConverter\Field\DBase7\TimestampConverter;
 include(__DIR__ . '/bootstrap/app.php');
 include(__DIR__ . '/bootstrap/cache.php');
 
+// ============================================================================
+// ✅ CONFIGURATION: Customer Full Sync Period (Easy to adjust for testing)
+// ============================================================================
+// Number of days to force sync customers (treat as full sync, ignore timestamp comparison)
+// Set to 0 to disable (use normal sync with timestamp comparison)
+// Example: 7 = sync customers updated in the last 7 days as full sync
+$CUSTOMER_FULL_SYNC_DAYS = 7; // Adjust this value for testing
+// ============================================================================
+
 // Initialize sync environment and progress display
 initializeSyncEnvironment();
 ProgressDisplay::start("🚀 Starting UBS Local Connector Sync Process");
@@ -135,6 +144,17 @@ try {
             $forceSyncTables = ['ubs_ubsstk2015_icitem', 'ubs_ubsstk2015_icgroup'];
             $isForceSync = in_array($ubs_table, $forceSyncTables);
             
+            // ✅ CUSTOMER FULL SYNC: Check if customers should use full sync for recent records
+            $isCustomers = ($ubs_table === 'ubs_ubsacc2015_arcust');
+            $customerFullSyncCutoff = null;
+            if ($isCustomers && $CUSTOMER_FULL_SYNC_DAYS > 0) {
+                // Calculate cutoff date: N days ago from now
+                $cutoffDate = new DateTime();
+                $cutoffDate->modify("-{$CUSTOMER_FULL_SYNC_DAYS} days");
+                $customerFullSyncCutoff = $cutoffDate->format('Y-m-d H:i:s');
+                ProgressDisplay::info("🔄 Customer Full Sync Mode: Syncing customers updated after $customerFullSyncCutoff (last $CUSTOMER_FULL_SYNC_DAYS days)");
+            }
+            
             try {
                 // Check if table exists first
                 $tableCheckSql = "SHOW TABLES LIKE '$ubs_table'";
@@ -148,6 +168,9 @@ try {
                 if ($isForceSync) {
                     // Force sync: Get ALL records regardless of timestamp or NULL values
                     $countSql = "SELECT COUNT(*) as total FROM `$ubs_table`";
+                } elseif ($isCustomers && $customerFullSyncCutoff !== null) {
+                    // Customer full sync: Get records updated after cutoff date (ignore last_synced_at)
+                    $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$customerFullSyncCutoff'";
                 } elseif ($resync_mode && $resync_date) {
                     // Resync mode: Get records where DATE(created_at) = date OR DATE(updated_at) = date
                     $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` 
@@ -177,14 +200,13 @@ try {
             $remoteCount = 0;
             $remote_data = []; // Will be fetched per chunk if needed
             
-            // Check if this is artran (orders) or ictran (order_items) - needs special handling
+            // Check if this is artran (orders), ictran (order_items), or customers - needs special handling
             $isArtran = ($ubs_table === 'ubs_ubsstk2015_artran');
             $isIctran = ($ubs_table === 'ubs_ubsstk2015_ictran');
-            $needsSpecialHandling = ($isArtran || $isIctran);
+            $needsSpecialHandling = ($isArtran || $isIctran || $isCustomers);
             
-            // Check if this is customers table - needs special handling when UBS is empty
-            $isCustomers = ($ubs_table === 'ubs_ubsacc2015_arcust');
-            $needsEmptyUbsCheck = ($needsSpecialHandling || $isCustomers);
+            // Alias for readability: tables that need special handling also need check when UBS is empty
+            $needsEmptyUbsCheck = $needsSpecialHandling;
             
             // Only check remote count if we have UBS data to compare, OR if it's artran/ictran/customers (always check when UBS is empty)
             if ($ubsCount > 0 || $needsEmptyUbsCheck) {
@@ -217,6 +239,9 @@ try {
                             $countSql = "SELECT COUNT(*) as total FROM $remote_table_name 
                                         WHERE (DATE(created_at) = '$resync_date' OR DATE(updated_at) = '$resync_date')";
                         }
+                    } elseif ($isCustomers && $customerFullSyncCutoff !== null) {
+                        // Customer full sync: Use cutoff date instead of last_synced_at for remote count
+                        $countSql = "SELECT COUNT(*) as total FROM $remote_table_name WHERE $column_updated_at > '$customerFullSyncCutoff'";
                     } elseif ($isArtran) {
                         // For artran (orders): Check both updated_at AND order_date to catch recent orders
                         // ✅ SAFER: Only count orders that have at least one order_item
@@ -330,6 +355,7 @@ try {
                     } else {
                         // ✅ FIX: When UBS table is empty, fetch ALL remote records regardless of timestamp
                         // This ensures all customers are synced to DBF even if they have old updated_at values
+                        // Note: Customer full sync cutoff is not used here because we want to populate UBS completely
                         $allRemoteSql = "SELECT * FROM $remote_table_name";
                     }
                     $allRemoteData = $db_remote_all->get($allRemoteSql);
@@ -423,6 +449,14 @@ try {
                         ORDER BY COALESCE(UPDATED_ON, '1970-01-01') ASC
                         LIMIT $chunkSize OFFSET $offset
                     ";
+                } elseif ($isCustomers && $customerFullSyncCutoff !== null) {
+                    // Customer full sync: Get records updated after cutoff date (ignore last_synced_at)
+                    $sql = "
+                        SELECT * FROM `$ubs_table` 
+                        WHERE UPDATED_ON > '$customerFullSyncCutoff'
+                        ORDER BY UPDATED_ON ASC
+                        LIMIT $chunkSize OFFSET $offset
+                    ";
                 } else {
                     // Normal sync: Only records updated after last sync
                     $sql = "
@@ -463,14 +497,52 @@ try {
                 }
                 
                 // ✅ FORCE SYNC: For icitem and icgroup, always sync all records (no timestamp comparison)
-                // This ensures PRICE and other fields are always updated, even if UPDATED_ON timestamps are equal
+                // ✅ CUSTOMER FULL SYNC: For customers within full sync period, sync UBS→Remote without timestamp comparison
+                // BUT: Still fetch remote data to allow Remote→UBS sync (critical for bidirectional sync)
                 if ($isForceSync) {
                     // Force sync: Convert all UBS data to remote format and upsert (ignore remote data comparison)
+                    ProgressDisplay::info("🔄 Using Force Sync mode - skipping timestamp comparison for this chunk");
                     $remote_data_to_upsert = [];
                     foreach ($ubs_data as $row) {
                         $remote_data_to_upsert[] = convert(Converter::table_convert_remote($ubs_table), $row, 'to_remote');
                     }
                     $ubs_data_to_upsert = [];
+                } elseif ($isCustomers && $customerFullSyncCutoff !== null) {
+                    // Customer full sync: Sync UBS→Remote without timestamp comparison, but still fetch remote data for Remote→UBS
+                    ProgressDisplay::info("🔄 Using Customer Full Sync mode - UBS→Remote without timestamp comparison, but allowing Remote→UBS");
+                    // Fetch remote data using cutoff date for comparison (allows Remote→UBS sync)
+                    $chunk_remote_data = [];
+                    if (!empty($chunk_keys)) {
+                        $chunk_remote_data = fetchRemoteDataByKeys($ubs_table, $chunk_keys, $customerFullSyncCutoff, null);
+                    }
+                    
+                    // UBS→Remote: Sync all UBS data without timestamp comparison (full sync)
+                    $remote_data_to_upsert = [];
+                    foreach ($ubs_data as $row) {
+                        $remote_data_to_upsert[] = convert(Converter::table_convert_remote($ubs_table), $row, 'to_remote');
+                    }
+                    
+                    // Remote→UBS: Find remote records not in UBS chunk and sync them
+                    $ubs_data_to_upsert = [];
+                    if (!empty($chunk_remote_data)) {
+                        $ubs_key = Converter::primaryKey($ubs_table);
+                        $ubs_key_set = [];
+                        foreach ($ubs_data as $row) {
+                            $key = $row[$ubs_key] ?? '';
+                            if (!empty($key)) {
+                                $ubs_key_set[$key] = true;
+                            }
+                        }
+                        // Find remote records that don't exist in current UBS chunk
+                        $remote_key = Converter::primaryKey(Converter::table_convert_remote($ubs_table));
+                        foreach ($chunk_remote_data as $remote_row) {
+                            $remoteKey = $remote_row[$remote_key] ?? '';
+                            if (!empty($remoteKey) && !isset($ubs_key_set[$remoteKey])) {
+                                // Remote record exists but not in current UBS chunk - sync to UBS
+                                $ubs_data_to_upsert[] = convert(Converter::table_convert_remote($ubs_table), $remote_row, 'to_ubs');
+                            }
+                        }
+                    }
                 } else {
                     // Normal sync: Fetch remote data and compare
                     $chunk_remote_data = [];
@@ -557,8 +629,8 @@ try {
                 // All records processed, break silently
             }
             
-            // ✅ For artran/ictran: Also check for missing remote records (Remote → UBS)
-            // This ensures orders created in remote but not yet in UBS are synced
+            // ✅ For artran/ictran/customers: Also check for missing remote records (Remote → UBS)
+            // This ensures records created in remote but not yet in UBS are synced
             if ($needsSpecialHandling && $ubsCount > 0) {
                 try {
                     $db_remote_check = new mysql();
@@ -577,6 +649,9 @@ try {
                         $missingRemoteSql = "SELECT oi.* FROM $remote_table_name oi
                                            INNER JOIN orders o ON oi.reference_no = o.reference_no
                                            WHERE (oi.$column_updated_at > '$last_synced_at' OR o.order_date > '$last_synced_at')";
+                    } elseif ($isCustomers && $customerFullSyncCutoff !== null) {
+                        // Customer full sync: Use cutoff date instead of last_synced_at for missing remote records
+                        $missingRemoteSql = "SELECT * FROM $remote_table_name WHERE $column_updated_at > '$customerFullSyncCutoff'";
                     } else {
                         $missingRemoteSql = "SELECT * FROM $remote_table_name WHERE $column_updated_at > '$last_synced_at'";
                     }
