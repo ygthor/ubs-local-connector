@@ -1915,6 +1915,25 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             }
         }
 
+        // Special handling for orders: Combine UBS DATE with CREATED_ON's time
+        // UBS's DATE field is DATE type (date only, no time), so when syncing we want to preserve
+        // the time component from UBS CREATED_ON to maintain the original time
+        if ($remote_table_name == 'orders' && isset($converted['order_date']) && isset($dataRow['CREATED_ON'])) {
+            $ubsDate = $converted['order_date']; // This is just the date from UBS (no time)
+            $createdOn = $dataRow['CREATED_ON']; // This is the datetime from UBS (has time)
+            
+            // Parse both to timestamps
+            $ubsDateTimestamp = strtotime($ubsDate);
+            $createdOnTimestamp = strtotime($createdOn);
+            
+            if ($ubsDateTimestamp !== false && $createdOnTimestamp !== false) {
+                // Extract date part from UBS DATE and time part from CREATED_ON, then combine
+                $datePart = date('Y-m-d', $ubsDateTimestamp);
+                $timePart = date('H:i:s', $createdOnTimestamp);
+                $converted['order_date'] = $datePart . ' ' . $timePart; // Result: '2025-12-12 11:11:11'
+            }
+            // If parsing fails, use UBS DATE as is (will default to 00:00:00)
+        }
 
         // Remove fields that should not be in remote tables
         // These fields may exist in UBS but not in remote tables
