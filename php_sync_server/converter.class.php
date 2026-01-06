@@ -154,7 +154,7 @@ class Converter
                 'NET'         => 'net_amount',
                 // Note: DEBITAMT and CREDITAMT are UBS-only fields, not synced to remote orders table
                 'CREATED_ON' => 'created_at',
-                'PLA_DODATE' => 'order_date',
+                //'PLA_DODATE' => 'order_date',
                 'UPDATED_ON' => 'updated_at',
 
             ],
