@@ -108,6 +108,7 @@ try {
     $processedTables = 0;
     $syncResults = []; // Track sync results for each table
     $tableStats = []; // Track insert/update statistics per table
+    $doItemsSynced = []; // Track DO (Delivery Order) items synced to remote
     
     foreach($ubsTables as $ubs_table) {
         $remote_table_name = Converter::table_convert_remote($ubs_table);
@@ -930,7 +931,30 @@ try {
         }
         $logContent[] = "";
     }
-    
+
+    // Add DO (Delivery Order) items summary
+    global $doItemsSynced;
+    if (!empty($doItemsSynced)) {
+        $logContent[] = "";
+        $logContent[] = "DELIVERY ORDER ITEMS SYNCED TO REMOTE (" . count($doItemsSynced) . " items)";
+        $logContent[] = str_repeat("-", 70);
+        $logContent[] = "DO_REF_NO    DATE       AGENT PRODUCT_NAME                              QTY";
+        $logContent[] = str_repeat("-", 70);
+
+        foreach ($doItemsSynced as $doItem) {
+            $refNo = str_pad(substr($doItem['reference_no'], 0, 12), 12);
+            $date = str_pad(substr($doItem['date'], 0, 10), 10);
+            $agent = str_pad(substr($doItem['agent_no'], 0, 5), 5);
+            $name = str_pad(substr($doItem['product_name'], 0, 35), 35);
+            $qty = str_pad($doItem['quantity'], 6);
+
+            $logContent[] = "$refNo $date $agent $name $qty";
+        }
+
+        $logContent[] = str_repeat("-", 80);
+        $logContent[] = "Total DO items synced: " . count($doItemsSynced);
+    }
+
     $logContent[] = "=" . str_repeat("=", 80);
     $logContent[] = "";
     
@@ -943,7 +967,19 @@ try {
     file_put_contents($logFile, implode("\n", $logContent));
     ProgressDisplay::info("");
     ProgressDisplay::info("📝 Log saved to: $logFile");
-    
+
+    // Open the log file
+    if (PHP_OS_FAMILY === 'Darwin') { // macOS
+        exec("open '$logFile'");
+        ProgressDisplay::info("📂 Log file opened automatically");
+    } elseif (PHP_OS_FAMILY === 'Windows') {
+        exec("start notepad '$logFile'");
+        ProgressDisplay::info("📂 Log file opened automatically");
+    } elseif (PHP_OS_FAMILY === 'Linux') {
+        exec("xdg-open '$logFile' 2>/dev/null &");
+        ProgressDisplay::info("📂 Log file opened automatically");
+    }
+
     ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     ProgressDisplay::complete("🎉 Sync process completed successfully! All " . count($syncResults) . " tables processed.");
     

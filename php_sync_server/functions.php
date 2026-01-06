@@ -290,16 +290,42 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
             // Some tables use 'updated_at' (lowercase), others use 'UPDATED_ON' (uppercase)
             $updated_at_field = Converter::mapUpdatedAtField($remote_table_name);
             ensureValidTimestamp($record, $updated_at_field);
-            
+
             // Handle created_at field (optional - only if mapping exists)
             $created_at_field = Converter::mapCreatedAtField($remote_table_name);
             if ($created_at_field !== null) {
                 ensureValidTimestamp($record, $created_at_field);
             }
-            
+
 
             if (count($record) > 0) {
                 $processedRecords[] = $record;
+            }
+        }
+
+        // Track DO (Delivery Order) items synced to remote
+        if ($remote_table_name == 'order_items' && !empty($processedRecords)) {
+            global $doItemsSynced;
+
+            // Process each order item to track DO items
+            foreach ($processedRecords as $record) {
+                // Check if TYPE is available in the record (from orders|type mapping)
+                $orderType = $record['TYPE'] ?? $record['type'] ?? '';
+                $orderDate = $record['DATE'] ?? $record['order_date'] ?? '';
+                $agentNo = $record['AGENNO'] ?? $record['agent_no'] ?? '';
+                $refNo = $record['reference_no'] ?? $record['REFNO'] ?? '';
+
+                if (strtoupper(trim($orderType)) === 'DO') {
+                    // This is a DO item, use available data
+                    $doItemsSynced[] = [
+                        'reference_no' => $refNo,
+                        'date' => $orderDate,
+                        'agent_no' => $agentNo,
+                        'product_group' => '', // Not available without SQL
+                        'product_name' => $record['DESP'] ?? $record['description'] ?? '', // Use item description
+                        'quantity' => $record['quantity'] ?? $record['QTY_BIL'] ?? $record['QTY'] ?? 0
+                    ];
+                }
             }
         }
 
