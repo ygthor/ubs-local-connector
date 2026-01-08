@@ -314,17 +314,37 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
                 $orderDate = $record['DATE'] ?? $record['order_date'] ?? '';
                 $agentNo = $record['AGENNO'] ?? $record['agent_no'] ?? '';
                 $refNo = $record['reference_no'] ?? $record['REFNO'] ?? '';
+                $productName = $record['DESP'] ?? $record['description'] ?? '';
+                $quantity = $record['quantity'] ?? $record['QTY_BIL'] ?? $record['QTY'] ?? 0;
 
                 if (strtoupper(trim($orderType)) === 'DO') {
-                    // This is a DO item, use available data
-                    $doItemsSynced[] = [
-                        'reference_no' => $refNo,
-                        'date' => $orderDate,
-                        'agent_no' => $agentNo,
-                        'product_group' => '', // Not available without SQL
-                        'product_name' => $record['DESP'] ?? $record['description'] ?? '', // Use item description
-                        'quantity' => $record['quantity'] ?? $record['QTY_BIL'] ?? $record['QTY'] ?? 0
-                    ];
+                    // Format quantity to 1 decimal place
+                    $quantityFormatted = number_format((float)$quantity, 1, '.', '');
+                    
+                    // Create unique key to prevent duplicates (refNo + productName + quantity)
+                    $uniqueKey = $refNo . '|' . $productName . '|' . $quantityFormatted;
+                    
+                    // Check if this item is already tracked (prevent duplicates)
+                    $isDuplicate = false;
+                    foreach ($doItemsSynced as $existingItem) {
+                        $existingKey = $existingItem['reference_no'] . '|' . $existingItem['product_name'] . '|' . $existingItem['quantity'];
+                        if ($existingKey === $uniqueKey) {
+                            $isDuplicate = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!$isDuplicate) {
+                        // This is a DO item, add to tracking
+                        $doItemsSynced[] = [
+                            'reference_no' => $refNo,
+                            'date' => $orderDate,
+                            'agent_no' => $agentNo,
+                            'product_group' => '', // Not available without SQL
+                            'product_name' => $productName,
+                            'quantity' => $quantityFormatted
+                        ];
+                    }
                 }
             }
         }
@@ -1961,16 +1981,24 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             // If parsing fails, use UBS DATE as is (will default to 00:00:00)
         }
 
-        // ✅ Special handling for order_items: Fetch TYPE from parent orders table
-        // This is needed for DO tracking before we remove the 'orders|type' mapping field
+        // ✅ Special handling for order_items: Fetch TYPE, DATE, AGENNO from parent orders table
+        // This is needed for DO tracking before we remove the 'orders|type' mapping fields
         if ($remote_table_name == 'order_items' && isset($dataRow['REFNO'])) {
             $db = new mysql;
             $db->connect();
             $refNo = $db->escape($dataRow['REFNO']);
-            $sql = "SELECT TYPE FROM ubs_ubsstk2015_artran WHERE REFNO='$refNo'";
+            $sql = "SELECT TYPE, DATE, AGENNO FROM ubs_ubsstk2015_artran WHERE REFNO='$refNo'";
             $orderData = $db->first($sql);
-            if ($orderData && isset($orderData['TYPE'])) {
-                $converted['TYPE'] = $orderData['TYPE'];
+            if ($orderData) {
+                if (isset($orderData['TYPE'])) {
+                    $converted['TYPE'] = $orderData['TYPE'];
+                }
+                if (isset($orderData['DATE'])) {
+                    $converted['DATE'] = $orderData['DATE'];
+                }
+                if (isset($orderData['AGENNO'])) {
+                    $converted['AGENNO'] = $orderData['AGENNO'];
+                }
             }
             $db->close();
         }

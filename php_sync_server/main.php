@@ -937,16 +937,16 @@ try {
     if (!empty($doItemsSynced)) {
         $logContent[] = "";
         $logContent[] = "DELIVERY ORDER ITEMS SYNCED TO REMOTE (" . count($doItemsSynced) . " items)";
-        $logContent[] = str_repeat("-", 70);
+        $logContent[] = str_repeat("-", 80);
         $logContent[] = "DO_REF_NO    DATE       AGENT PRODUCT_NAME                              QTY";
-        $logContent[] = str_repeat("-", 70);
+        $logContent[] = str_repeat("-", 80);
 
         foreach ($doItemsSynced as $doItem) {
             $refNo = str_pad(substr($doItem['reference_no'], 0, 12), 12);
             $date = str_pad(substr($doItem['date'], 0, 10), 10);
             $agent = str_pad(substr($doItem['agent_no'], 0, 5), 5);
             $name = str_pad(substr($doItem['product_name'], 0, 35), 35);
-            $qty = str_pad($doItem['quantity'], 6);
+            $qty = str_pad($doItem['quantity'], 8, ' ', STR_PAD_LEFT); // Right-align quantity
 
             $logContent[] = "$refNo $date $agent $name $qty";
         }
