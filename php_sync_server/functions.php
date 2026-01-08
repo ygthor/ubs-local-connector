@@ -1965,7 +1965,7 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
         // This is needed for DO tracking before we remove the 'orders|type' mapping field
         if ($remote_table_name == 'order_items' && isset($dataRow['REFNO'])) {
             $db = new mysql;
-            $db->connect_local();
+            $db->connect();
             $refNo = $db->escape($dataRow['REFNO']);
             $sql = "SELECT TYPE FROM ubs_ubsstk2015_artran WHERE REFNO='$refNo'";
             $orderData = $db->first($sql);
