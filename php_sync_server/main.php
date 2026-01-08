@@ -973,7 +973,7 @@ try {
         exec("open '$logFile'");
         ProgressDisplay::info("📂 Log file opened automatically");
     } elseif (PHP_OS_FAMILY === 'Windows') {
-        exec("start notepad '$logFile'");
+        exec('notepad.exe "' . $logFile . '"');
         ProgressDisplay::info("📂 Log file opened automatically");
     } elseif (PHP_OS_FAMILY === 'Linux') {
         exec("xdg-open '$logFile' 2>/dev/null &");
