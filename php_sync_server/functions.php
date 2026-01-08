@@ -1961,6 +1961,20 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             // If parsing fails, use UBS DATE as is (will default to 00:00:00)
         }
 
+        // ✅ Special handling for order_items: Fetch TYPE from parent orders table
+        // This is needed for DO tracking before we remove the 'orders|type' mapping field
+        if ($remote_table_name == 'order_items' && isset($dataRow['REFNO'])) {
+            $db = new mysql;
+            $db->connect_local();
+            $refNo = $db->escape($dataRow['REFNO']);
+            $sql = "SELECT TYPE FROM ubs_ubsstk2015_artran WHERE REFNO='$refNo'";
+            $orderData = $db->first($sql);
+            if ($orderData && isset($orderData['TYPE'])) {
+                $converted['TYPE'] = $orderData['TYPE'];
+            }
+            $db->close();
+        }
+
         // Remove fields that should not be in remote tables
         // These fields may exist in UBS but not in remote tables
         $fieldsToRemove = ['CREATED_BY', 'UPDATED_BY', 'created_by', 'updated_by'];
