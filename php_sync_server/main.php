@@ -937,21 +937,45 @@ try {
     if (!empty($doItemsSynced)) {
         $logContent[] = "";
         $logContent[] = "DELIVERY ORDER ITEMS SYNCED TO REMOTE (" . count($doItemsSynced) . " items)";
-        $logContent[] = str_repeat("-", 80);
-        $logContent[] = "DO_REF_NO    DATE       AGENT PRODUCT_NAME                              QTY";
-        $logContent[] = str_repeat("-", 80);
+        $logContent[] = str_repeat("=", 80);
+        $logContent[] = "";
 
+        // Group items by agent
+        $itemsByAgent = [];
         foreach ($doItemsSynced as $doItem) {
-            $refNo = str_pad(substr($doItem['reference_no'], 0, 12), 12);
-            $date = str_pad(substr($doItem['date'], 0, 10), 10);
-            $agent = str_pad(substr($doItem['agent_no'], 0, 5), 5);
-            $name = str_pad(substr($doItem['product_name'], 0, 35), 35);
-            $qty = str_pad($doItem['quantity'], 8, ' ', STR_PAD_LEFT); // Right-align quantity
-
-            $logContent[] = "$refNo $date $agent $name $qty";
+            $agentNo = $doItem['agent_no'];
+            if (!isset($itemsByAgent[$agentNo])) {
+                $itemsByAgent[$agentNo] = [];
+            }
+            $itemsByAgent[$agentNo][] = $doItem;
         }
 
-        $logContent[] = str_repeat("-", 80);
+        // Sort agents alphabetically
+        ksort($itemsByAgent);
+
+        // Display items grouped by agent
+        foreach ($itemsByAgent as $agentNo => $items) {
+            $logContent[] = "AGENT: $agentNo";
+            $logContent[] = str_repeat("-", 80);
+            $logContent[] = "DO_REF_NO    DATE       PRODUCT_NAME                              QTY";
+            $logContent[] = str_repeat("-", 80);
+
+            foreach ($items as $doItem) {
+                $refNo = str_pad(substr($doItem['reference_no'], 0, 12), 12);
+                $date = str_pad(substr($doItem['date'], 0, 10), 10);
+                $name = str_pad(substr($doItem['product_name'], 0, 45), 45);
+                $qty = str_pad($doItem['quantity'], 8, ' ', STR_PAD_LEFT); // Right-align quantity
+
+                $logContent[] = "$refNo $date $name $qty";
+            }
+
+            $logContent[] = str_repeat("-", 80);
+            $logContent[] = "Total items for Agent $agentNo: " . count($items);
+            $logContent[] = "";
+            $logContent[] = "";
+        }
+
+        $logContent[] = str_repeat("=", 80);
         $logContent[] = "Total DO items synced: " . count($doItemsSynced);
     }
 
