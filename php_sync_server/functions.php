@@ -349,6 +349,19 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
             }
         }
 
+        // ✅ CLEANUP: Remove temporary tracking fields that don't exist in remote tables
+        // These fields (TYPE, DATE, AGENNO) were added by convert() for DO tracking purposes
+        // but should NOT be inserted into the remote order_items table
+        if ($remote_table_name == 'order_items') {
+            $fieldsToRemoveFromOrderItems = ['TYPE', 'type', 'DATE', 'AGENNO', 'agent_no'];
+            foreach ($processedRecords as &$record) {
+                foreach ($fieldsToRemoveFromOrderItems as $field) {
+                    unset($record[$field]);
+                }
+            }
+            unset($record); // Break reference
+        }
+
         // Ensure primary key is correctly detected before proceeding
         if (empty($primary_key)) {
             ProgressDisplay::error("❌ No primary key defined for table: $remote_table_name");
