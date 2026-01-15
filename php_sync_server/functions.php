@@ -2129,10 +2129,15 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             if (isset($converted['TRANCODE']) && isset($dataRow['item_count'])) {
                 $itemCount = (int)$dataRow['item_count'];
                 $converted['TRANCODE'] = str_pad($itemCount, 4, '0', STR_PAD_LEFT);
+            }else{
+                $converted['TRANCODE'] = '0000';
             }
 
             // Set FPERIOD to 8
-            $converted['FPERIOD'] = '8';
+            // 1 = 2025-01
+            // 2 = 2025-02
+            // 13 = 2026-01
+            $converted['FPERIOD'] = ($year - 2025) * 12 + $month;
 
             // Set JOB_VALUE and JOB2_VALUE to 0
             $converted['JOB_VALUE'] = '0';
