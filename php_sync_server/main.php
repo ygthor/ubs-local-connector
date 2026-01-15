@@ -76,6 +76,10 @@ try {
         if (empty($last_synced_at)) {
             $last_synced_at = '2025-08-01 00:00:00';
         }
+
+        // prevent race problem
+        // in case got data inserted in the sync between last 10 minutes, sync will be skipped
+        $last_synced_at = date('Y-m-d H:i:s', strtotime($last_synced_at.' - 10 minutes'));
         // $last_synced_at = '2025-08-01 00:00:00';
     }
     
