@@ -1676,9 +1676,19 @@ function insertUbsRecord($editor, $record, $table_name, $full_table_name = null,
                     $value = $converted;
                 }
 
-                // Truncate to exact byte length (DBF uses fixed-length fields)
-                if (strlen($value) > $fieldLength) {
-                    $value = substr($value, 0, $fieldLength);
+                // ✅ FIX: Truncate to exact byte length using mb_strcut for multi-byte safety
+                // DBF uses fixed-length fields based on BYTES, not characters
+                $byteLength = strlen($value);
+                if ($byteLength > $fieldLength) {
+                    // Use mb_strcut to safely truncate without breaking multi-byte characters
+                    $value = mb_strcut($value, 0, $fieldLength, 'CP1252');
+                    
+                    // Double-check byte length after truncation
+                    $byteLengthAfter = strlen($value);
+                    if ($byteLengthAfter > $fieldLength) {
+                        // Fallback: force truncate to exact byte length
+                        $value = substr($value, 0, $fieldLength);
+                    }
                 }
             }
 
@@ -2306,6 +2316,11 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 // If no datetime found, use current time
                 $converted['TRADATETIME'] = date('m/d/y h:i A');
             }
+
+            // ✅ FIX: Remove TRDATETIME field (from mapping) since we've now set TRADATETIME
+            // The mapping creates 'TRDATETIME' but the DBF field is 'TRADATETIME'
+            // Having both causes "Invalid number of bytes" error (3005 vs 3004 expected)
+            unset($converted['TRDATETIME']);
 
             // Set CURRATE to 1
             $converted['CURRRATE'] = '1';
