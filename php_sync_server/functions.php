@@ -2147,6 +2147,8 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             // 1 = 2025-01
             // 2 = 2025-02
             // 13 = 2026-01
+            $year = date('Y');
+            $month = date('m');
             $converted['FPERIOD'] = ($year - 2025) * 12 + $month;
 
             // Set JOB_VALUE and JOB2_VALUE to 0
@@ -2317,10 +2319,6 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $converted['TRADATETIME'] = date('m/d/y h:i A');
             }
 
-            // ✅ FIX: Remove TRDATETIME field (from mapping) since we've now set TRADATETIME
-            // The mapping creates 'TRDATETIME' but the DBF field is 'TRADATETIME'
-            // Having both causes "Invalid number of bytes" error (3005 vs 3004 expected)
-            unset($converted['TRDATETIME']);
 
             // Set CURRATE to 1
             $converted['CURRRATE'] = '1';
