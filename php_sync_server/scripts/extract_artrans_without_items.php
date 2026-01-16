@@ -30,7 +30,9 @@ $sql = "
         COUNT(IC.REFNO) AS count_items
     FROM ubs_ubsstk2015_artran AS AR
     LEFT JOIN ubs_ubsstk2015_ictran AS IC ON AR.REFNO = IC.REFNO
+    WHERE TYPE NOT IN  ('RC','DO')
     GROUP BY AR.REFNO
+    ORDER BY DATE DESC
     HAVING count_items = 0
 ";
 
