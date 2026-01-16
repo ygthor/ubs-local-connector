@@ -26,10 +26,11 @@ writeLog('Database connection established', 'INFO');
 
 $sql = "
     SELECT 
-        REFNO,
-        COUNT(IC.*) AS count_items
+        AR.REFNO,
+        COUNT(IC.REFNO) AS count_items
     FROM ubs_ubsstk2015_artran AS AR
     LEFT JOIN ubs_ubsstk2015_ictran AS IC ON AR.REFNO = IC.REFNO
+    GROUP BY AR.REFNO
     HAVING count_items = 0
 ";
 
