@@ -74,22 +74,15 @@ try {
     
     // Open the output file when complete
     writeLog('Opening output file...', 'INFO');
-    if (file_exists($output_file)) {
-        if (PHP_OS_FAMILY === 'Darwin') {
-            // macOS
-            exec("open " . escapeshellarg($output_file) . " 2>&1", $output, $return_code);
-        } elseif (PHP_OS_FAMILY === 'Windows') {
-            // Windows
-            exec("start " . escapeshellarg($output_file) . " 2>&1", $output, $return_code);
-        } else {
-            // Linux
-            exec("xdg-open " . escapeshellarg($output_file) . " > /dev/null 2>&1 &", $output, $return_code);
-        }
-        if ($return_code === 0) {
-            writeLog('Output file opened successfully', 'SUCCESS');
-        } else {
-            writeLog('Failed to open file automatically. File saved at: ' . $output_file, 'WARNING');
-        }
+    if (PHP_OS_FAMILY === 'Darwin') { // macOS
+        exec("open '$output_file'");
+        writeLog('📂 Output file opened automatically', 'SUCCESS');
+    } elseif (PHP_OS_FAMILY === 'Windows') {
+        exec('notepad.exe "' . $output_file . '"');
+        writeLog('📂 Output file opened automatically', 'SUCCESS');
+    } elseif (PHP_OS_FAMILY === 'Linux') {
+        exec("xdg-open '$output_file' 2>/dev/null &");
+        writeLog('📂 Output file opened automatically', 'SUCCESS');
     }
     
 } catch (Exception $e) {
