@@ -71,6 +71,80 @@ function ensureValidTimestamp(&$record, $field_name)
     }
 }
 
+/**
+ * Get FPERIOD from order date based on periods table in remote database
+ * FPERIOD is calculated by counting months from the earliest period's start_date
+ * Example: If earliest period starts 2025-01, then:
+ *   - 2025-01 = 1
+ *   - 2025-02 = 2
+ *   - 2026-01 = 13
+ * 
+ * @param string $orderDate The order date in format YYYY-MM-DD or YYYY-MM-DD HH:MM:SS
+ * @return int FPERIOD value
+ */
+function getFPeriodFromDate($orderDate)
+{
+    try {
+        // Parse the order date
+        if (empty($orderDate)) {
+            $orderDate = date('Y-m-d');
+        }
+        
+        $timestamp = strtotime($orderDate);
+        if ($timestamp === false) {
+            $timestamp = time(); // Fallback to current time
+        }
+        
+        $orderYear = (int)date('Y', $timestamp);
+        $orderMonth = (int)date('m', $timestamp);
+        $orderDateFormatted = date('Y-m-d', $timestamp);
+        
+        // Connect to remote database and query periods table
+        $db = new mysql;
+        $db->connect_remote();
+        
+        // Find the period that contains this order date
+        $sql = "SELECT start_date, end_date FROM periods 
+                WHERE start_date <= '$orderDateFormatted' 
+                AND end_date >= '$orderDateFormatted'
+                AND is_active = 1
+                LIMIT 1";
+        
+        $period = $db->first($sql);
+        
+        if ($period && isset($period['start_date']) && isset($period['end_date'])) {
+            // Period found - calculate FPERIOD based on position
+            // Get the earliest period's start_date as the base
+            $baseSQL = "SELECT start_date FROM periods WHERE is_active = 1 ORDER BY start_date ASC LIMIT 1";
+            $basePeriod = $db->first($baseSQL);
+            $db->close();
+            
+            if ($basePeriod && isset($basePeriod['start_date'])) {
+                $baseDate = $basePeriod['start_date'];
+                $baseTimestamp = strtotime($baseDate);
+                $baseYear = (int)date('Y', $baseTimestamp);
+                $baseMonth = (int)date('m', $baseTimestamp);
+                
+                // Calculate FPERIOD: months from base period to order month
+                // FPERIOD = (orderYear - baseYear) * 12 + (orderMonth - baseMonth) + 1
+                $fperiod = ($orderYear - $baseYear) * 12 + ($orderMonth - $baseMonth) + 1;
+                return $fperiod;
+            }
+        }
+        
+        $db->close();
+        
+        // Fallback: If no matching period found, calculate based on year/month
+        // Assume 2025-01 is the base (1 = 2025-01, 2 = 2025-02, 13 = 2026-01, etc.)
+        return ($orderYear - 2025) * 12 + $orderMonth;
+    } catch (Exception $e) {
+        // If any error occurs, fallback to current month calculation
+        $year = date('Y');
+        $month = date('m');
+        return ($year - 2025) * 12 + $month;
+    }
+}
+
 // Enhanced progress display system
 class ProgressDisplay
 {
@@ -2143,13 +2217,10 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $converted['TRANCODE'] = '0000';
             }
 
-            // Set FPERIOD to 8
-            // 1 = 2025-01
-            // 2 = 2025-02
-            // 13 = 2026-01
-            $year = date('Y');
-            $month = date('m');
-            $converted['FPERIOD'] = ($year - 2025) * 12 + $month;
+            // Get FPERIOD based on order date and periods table
+            // 1 = 2025-01, 2 = 2025-02, 13 = 2026-01, etc.
+            $orderDate = isset($converted['DATE']) ? $converted['DATE'] : date('Y-m-d');
+            $converted['FPERIOD'] = getFPeriodFromDate($orderDate);
 
             // Set JOB_VALUE and JOB2_VALUE to 0
             $converted['JOB_VALUE'] = '0';
