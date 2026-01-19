@@ -3,17 +3,16 @@
  * Test script for FPERIOD debugging
  *
  * Usage:
- *   php test_fperiod.php INV-001
+ *   php test_fperiod.php S200568
  */
 
-require_once __DIR__ . '/bootstrap/index.php';
-require_once __DIR__ . '/functions.php';
+include(__DIR__ . '/bootstrap/app.php');
 
 $referenceNo = $argv[1] ?? null;
 
 if (!$referenceNo) {
     echo "Usage: php test_fperiod.php <reference_no>\n";
-    echo "Example: php test_fperiod.php INV-001\n";
+    echo "Example: php test_fperiod.php S200568\n";
     exit(1);
 }
 
