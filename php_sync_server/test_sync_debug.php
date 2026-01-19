@@ -17,13 +17,13 @@ if (!$referenceNo) {
 
 echo "=== SYNC DEBUG FOR $referenceNo ===\n";
 
-// 0. Check last_synced_at for artran
+// 0. Check last_synced_at (from sync_logs)
 echo "\n[0] Sync metadata:\n";
 $db = new mysql;
-$lastSynced = $db->first("SELECT last_synced_at FROM sync_metadata WHERE table_name='ubs_ubsstk2015_artran'");
+$lastSynced = $db->first("SELECT synced_at FROM sync_logs ORDER BY synced_at DESC LIMIT 1");
 $db->close();
 if ($lastSynced) {
-    echo "   last_synced_at: " . $lastSynced['last_synced_at'] . "\n";
+    echo "   last_synced_at: " . $lastSynced['synced_at'] . "\n";
 } else {
     echo "   last_synced_at: NOT SET\n";
 }
