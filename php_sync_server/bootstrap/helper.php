@@ -21,19 +21,19 @@ if (!function_exists('isCli')) {
 if (!function_exists('dump')) {
     function dump($v = 'RANDOM_STR')
     {
-        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
-        $traceOutput = [];
+        // $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+        // $traceOutput = [];
 
-        foreach ($trace as $i => $t) {
-            $file = $t['file'] ?? 'unknown file';
-            $line = $t['line'] ?? 'unknown line';
-            $func = $t['function'] ?? '';
-            $class = $t['class'] ?? '';
-            $type = $t['type'] ?? '';
-            $traceOutput[] = "#$i $file($line): $class$type$func()";
-        }
+        // foreach ($trace as $i => $t) {
+        //     $file = $t['file'] ?? 'unknown file';
+        //     $line = $t['line'] ?? 'unknown line';
+        //     $func = $t['function'] ?? '';
+        //     $class = $t['class'] ?? '';
+        //     $type = $t['type'] ?? '';
+        //     $traceOutput[] = "#$i $file($line): $class$type$func()";
+        // }
 
-        $output = "Backtrace:\n" . implode("\n", $traceOutput) . "\n\n";
+        // $output = "Backtrace:\n" . implode("\n", $traceOutput) . "\n\n";
 
         // Value output
         if ($v === null) {
