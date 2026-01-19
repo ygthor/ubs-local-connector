@@ -2174,6 +2174,22 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $converted['DEBITAMT'] = $amount;
                 $converted['CREDITAMT'] = 0;
             }
+
+            if (isset($converted['DATE'])) {
+                $dateValue = $converted['DATE'];
+            
+                if (is_numeric($dateValue)) {
+                    // Timestamp
+                    $converted['DATE'] = date('Y-m-d', $dateValue);
+                } else {
+                    // String or DateTime or other formats
+                    $timestamp = strtotime($dateValue);
+                    $converted['DATE'] = $timestamp ? date('Y-m-d', $timestamp) : date('Y-m-d');
+                }
+            }
+            
+            $orderDate = isset($converted['DATE']) ? $converted['DATE'] : date('Y-m-d');
+            $converted['FPERIOD'] = getFPeriodFromDate($orderDate);
         }
 
         // Special handling for order_items syncing to ictran
@@ -2181,34 +2197,18 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             // Format DATE field if it's already set (from mapping) - ensure it's YYYY-MM-DD format
             if (isset($converted['DATE'])) {
                 $dateValue = $converted['DATE'];
-                // Handle datetime/timestamp format - extract date part only
+            
                 if (is_numeric($dateValue)) {
-                    // If it's a timestamp integer
+                    // Timestamp
                     $converted['DATE'] = date('Y-m-d', $dateValue);
-                } elseif (is_string($dateValue)) {
-                    // If it's a string, try to parse it
-                    // Handle datetime format (YYYY-MM-DD HH:MM:SS) or date format (YYYY-MM-DD)
-                    if (preg_match('/^(\d{4}-\d{2}-\d{2})(\s\d{2}:\d{2}:\d{2})?/', $dateValue, $matches)) {
-                        // Extract just the date part (YYYY-MM-DD)
-                        $converted['DATE'] = $matches[1];
-                    } else {
-                        // Try strtotime as fallback
-                        $timestamp = strtotime($dateValue);
-                        if ($timestamp !== false) {
-                            $converted['DATE'] = date('Y-m-d', $timestamp);
-                        }
-                        // If strtotime fails, keep as-is (might already be YYYY-MM-DD)
-                    }
                 } else {
-                    // If it's already a DateTime object or other format, try to convert
-                    $timestamp = strtotime((string)$dateValue);
-                    if ($timestamp !== false) {
-                        $converted['DATE'] = date('Y-m-d', $timestamp);
-                    } else {
-                        $converted['DATE'] = date('Y-m-d'); // Fallback to today
-                    }
+                    // String or DateTime or other formats
+                    $timestamp = strtotime($dateValue);
+                    $converted['DATE'] = $timestamp ? date('Y-m-d', $timestamp) : date('Y-m-d');
                 }
             }
+
+            
             // Format TRANCODE as strpad 4 based on item_count (e.g., 1 => 0001)
             if (isset($converted['TRANCODE']) && isset($dataRow['item_count'])) {
                 $itemCount = (int)$dataRow['item_count'];
