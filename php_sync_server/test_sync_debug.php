@@ -46,22 +46,25 @@ if (!file_exists($dbfPath)) {
 } else {
     $table = new \XBase\TableReader($dbfPath);
     $found = false;
-    while ($record = $table->nextRecord()) {
-        if ($record->deleted) continue;
-        $refno = trim($record->get('REFNO') ?? '');
-        if ($refno === $referenceNo) {
-            $found = true;
-            echo "   REFNO: " . $refno . "\n";
-            echo "   DATE: " . ($record->get('DATE') ?? 'NULL') . "\n";
-            echo "   UPDATED_ON: " . ($record->get('UPDATED_ON') ?? 'NULL') . "\n";
-            echo "   FPERIOD: " . ($record->get('FPERIOD') ?? 'NULL') . "\n";
-            break;
+    try {
+        while ($record = $table->nextRecord()) {
+            $refno = trim($record->get('REFNO') ?? '');
+            if ($refno === $referenceNo) {
+                $found = true;
+                echo "   REFNO: " . $refno . "\n";
+                echo "   DATE: " . ($record->get('DATE') ?? 'NULL') . "\n";
+                echo "   UPDATED_ON: " . ($record->get('UPDATED_ON') ?? 'NULL') . "\n";
+                echo "   FPERIOD: " . ($record->get('FPERIOD') ?? 'NULL') . "\n";
+                break;
+            }
         }
-    }
-    $table->close();
+        $table->close();
 
-    if (!$found) {
-        echo "   NOT FOUND in artran.dbf\n";
+        if (!$found) {
+            echo "   NOT FOUND in artran.dbf\n";
+        }
+    } catch (Exception $e) {
+        echo "   ERROR reading DBF: " . $e->getMessage() . "\n";
     }
 }
 
@@ -74,34 +77,43 @@ if ($remote && isset($remote['updated_at'])) {
 
     // Re-read UBS for comparison
     if (file_exists($dbfPath)) {
-        $table = new \XBase\TableReader($dbfPath);
-        while ($record = $table->nextRecord()) {
-            if ($record->deleted) continue;
-            $refno = trim($record->get('REFNO') ?? '');
-            if ($refno === $referenceNo) {
-                $ubs_updated_on = $record->get('UPDATED_ON');
+        try {
+            $table = new \XBase\TableReader($dbfPath);
+            $foundForCompare = false;
+            while ($record = $table->nextRecord()) {
+                $refno = trim($record->get('REFNO') ?? '');
+                if ($refno === $referenceNo) {
+                    $foundForCompare = true;
+                    $ubs_updated_on = $record->get('UPDATED_ON');
 
-                // Handle invalid timestamps (same logic as syncEntity)
-                if (empty($ubs_updated_on) || $ubs_updated_on === '0000-00-00' ||
-                    $ubs_updated_on === '0000-00-00 00:00:00' || strtotime($ubs_updated_on) === false) {
-                    $ubs_updated_on = '1970-01-01 00:00:00';
+                    // Handle invalid timestamps (same logic as syncEntity)
+                    if (empty($ubs_updated_on) || $ubs_updated_on === '0000-00-00' ||
+                        $ubs_updated_on === '0000-00-00 00:00:00' || strtotime($ubs_updated_on) === false) {
+                        $ubs_updated_on = '1970-01-01 00:00:00';
+                    }
+
+                    $ubs_time = strtotime($ubs_updated_on);
+                    echo "   UBS UPDATED_ON: $ubs_updated_on (timestamp: $ubs_time)\n";
+
+                    echo "\n   COMPARISON RESULT:\n";
+                    if ($ubs_time > $remote_time) {
+                        echo "   -> UBS is NEWER - would sync UBS->Remote\n";
+                    } elseif ($remote_time > $ubs_time) {
+                        echo "   <- Remote is NEWER - should sync Remote->UBS\n";
+                    } else {
+                        echo "   == EQUAL timestamps - no sync needed\n";
+                    }
+                    break;
                 }
-
-                $ubs_time = strtotime($ubs_updated_on);
-                echo "   UBS UPDATED_ON: $ubs_updated_on (timestamp: $ubs_time)\n";
-
-                echo "\n   COMPARISON RESULT:\n";
-                if ($ubs_time > $remote_time) {
-                    echo "   ➡️  UBS is NEWER - would sync UBS→Remote\n";
-                } elseif ($remote_time > $ubs_time) {
-                    echo "   ⬅️  Remote is NEWER - should sync Remote→UBS\n";
-                } else {
-                    echo "   ⏸️  EQUAL timestamps - no sync needed\n";
-                }
-                break;
             }
+            $table->close();
+
+            if (!$foundForCompare) {
+                echo "   Record NOT FOUND in UBS - should INSERT to UBS\n";
+            }
+        } catch (Exception $e) {
+            echo "   ERROR: " . $e->getMessage() . "\n";
         }
-        $table->close();
     }
 }
 
