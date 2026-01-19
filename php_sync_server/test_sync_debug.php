@@ -79,57 +79,51 @@ if (!file_exists($dbfPath)) {
     }
 }
 
-// 3. Compare timestamps
-echo "\n[3] Timestamp comparison:\n";
+// 2b. Get LOCAL MySQL data (this is what main.php uses!)
+echo "\n[2b] LOCAL MySQL data (ubs_ubsstk2015_artran):\n";
+$db = new mysql;
+$db->connect_local();
+$localRecord = $db->first("SELECT REFNO, DATE, UPDATED_ON, FPERIOD FROM ubs_ubsstk2015_artran WHERE REFNO='$refNo'");
+$db->close();
+
+if (!$localRecord) {
+    echo "   NOT FOUND in local MySQL!\n";
+} else {
+    echo "   REFNO: " . $localRecord['REFNO'] . "\n";
+    echo "   DATE: " . ($localRecord['DATE'] ?? 'NULL') . "\n";
+    echo "   UPDATED_ON: " . ($localRecord['UPDATED_ON'] ?? 'NULL') . "\n";
+    echo "   FPERIOD: " . ($localRecord['FPERIOD'] ?? 'NULL') . "\n";
+}
+
+// 3. Compare timestamps (using LOCAL MySQL - same as main.php)
+echo "\n[3] Timestamp comparison (main.php uses LOCAL MySQL!):\n";
 if ($remote && isset($remote['updated_at'])) {
     $remote_updated_at = $remote['updated_at'];
     $remote_time = strtotime($remote_updated_at);
     echo "   Remote updated_at: $remote_updated_at (timestamp: $remote_time)\n";
 
-    // Re-read UBS for comparison
-    if (file_exists($dbfPath)) {
-        try {
-            $table = new \XBase\TableReader($dbfPath);
-            $foundForCompare = false;
-            while ($record = $table->nextRecord()) {
-                $refno = trim($record->get('REFNO') ?? '');
-                if ($refno === $referenceNo) {
-                    $foundForCompare = true;
-                    $ubs_updated_on = $record->get('UPDATED_ON');
+    if ($localRecord) {
+        $local_updated_on = $localRecord['UPDATED_ON'] ?? null;
 
-                    // Handle DateTime objects
-                    if ($ubs_updated_on instanceof DateTime) {
-                        $ubs_updated_on = $ubs_updated_on->format('Y-m-d H:i:s');
-                    }
-
-                    // Handle invalid timestamps (same logic as syncEntity)
-                    if (empty($ubs_updated_on) || $ubs_updated_on === '0000-00-00' ||
-                        $ubs_updated_on === '0000-00-00 00:00:00' || strtotime($ubs_updated_on) === false) {
-                        $ubs_updated_on = '1970-01-01 00:00:00';
-                    }
-
-                    $ubs_time = strtotime($ubs_updated_on);
-                    echo "   UBS UPDATED_ON: $ubs_updated_on (timestamp: $ubs_time)\n";
-
-                    echo "\n   COMPARISON RESULT:\n";
-                    if ($ubs_time > $remote_time) {
-                        echo "   -> UBS is NEWER - would sync UBS->Remote\n";
-                    } elseif ($remote_time > $ubs_time) {
-                        echo "   <- Remote is NEWER - should sync Remote->UBS\n";
-                    } else {
-                        echo "   == EQUAL timestamps - no sync needed\n";
-                    }
-                    break;
-                }
-            }
-            $table->close();
-
-            if (!$foundForCompare) {
-                echo "   Record NOT FOUND in UBS - should INSERT to UBS\n";
-            }
-        } catch (Exception $e) {
-            echo "   ERROR: " . $e->getMessage() . "\n";
+        // Handle invalid timestamps (same logic as syncEntity)
+        if (empty($local_updated_on) || $local_updated_on === '0000-00-00' ||
+            $local_updated_on === '0000-00-00 00:00:00' || strtotime($local_updated_on) === false) {
+            $local_updated_on = '1970-01-01 00:00:00';
         }
+
+        $local_time = strtotime($local_updated_on);
+        echo "   Local MySQL UPDATED_ON: $local_updated_on (timestamp: $local_time)\n";
+
+        echo "\n   COMPARISON RESULT (what main.php sees):\n";
+        if ($local_time > $remote_time) {
+            echo "   -> Local is NEWER - would sync UBS->Remote (NO update to DBF)\n";
+        } elseif ($remote_time > $local_time) {
+            echo "   <- Remote is NEWER - should sync Remote->UBS\n";
+        } else {
+            echo "   == EQUAL timestamps - no sync needed\n";
+        }
+    } else {
+        echo "   Record NOT FOUND in local MySQL - should INSERT to UBS\n";
     }
 }
 
