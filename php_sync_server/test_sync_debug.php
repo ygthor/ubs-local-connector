@@ -105,6 +105,20 @@ if (!$localRecord) {
     echo "   FPERIOD: " . ($localRecord['FPERIOD'] ?? 'NULL') . "\n";
 }
 
+// 2c. Get LOCAL MySQL ictran data (order_items)
+echo "\n[2c] LOCAL MySQL data (ubs_ubsstk2015_ictran):\n";
+$db = new mysql;
+$localIctran = $db->get("SELECT REFNO, ITEMCOUNT, UPDATED_ON FROM ubs_ubsstk2015_ictran WHERE REFNO='$refNo' LIMIT 5");
+$db->close();
+
+if (empty($localIctran)) {
+    echo "   NOT FOUND in local MySQL!\n";
+} else {
+    foreach ($localIctran as $item) {
+        echo "   REFNO: " . $item['REFNO'] . " | ITEMCOUNT: " . $item['ITEMCOUNT'] . " | UPDATED_ON: " . ($item['UPDATED_ON'] ?? 'NULL') . "\n";
+    }
+}
+
 // 3. Compare timestamps (using LOCAL MySQL - same as main.php)
 echo "\n[3] Timestamp comparison (main.php uses LOCAL MySQL!):\n";
 if ($remote && isset($remote['updated_at'])) {
