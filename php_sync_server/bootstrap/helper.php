@@ -19,51 +19,41 @@ if (!function_exists('isCli')) {
 }
 
 if (!function_exists('dump')) {
-
     function dump($v = 'RANDOM_STR')
     {
-        if (isCli()) {
-            // CMD/CLI display pattern - compact format
-            
-            if ($v === null) {
-                echo 'null';
-            } elseif ($v === 'RANDOM_STR') {
-                echo randstr();
-            } elseif ($v === true) {
-                echo 'true';
-            } elseif ($v === false) {
-                echo 'false';
-            } else {
-                if (is_array($v)) {
-                    $v = (json_encode($v, JSON_PRETTY_PRINT));
-                    $v = strip_tags($v);
-                    print_r($v);
-                } else {
-                    print_r($v);
-                }
-            }
-            echo "\n";
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+        $traceOutput = [];
+
+        foreach ($trace as $i => $t) {
+            $file = $t['file'] ?? 'unknown file';
+            $line = $t['line'] ?? 'unknown line';
+            $func = $t['function'] ?? '';
+            $class = $t['class'] ?? '';
+            $type = $t['type'] ?? '';
+            $traceOutput[] = "#$i $file($line): $class$type$func()";
+        }
+
+        $output = "Backtrace:\n" . implode("\n", $traceOutput) . "\n\n";
+
+        // Value output
+        if ($v === null) {
+            $output .= 'null';
+        } elseif ($v === 'RANDOM_STR') {
+            $output .= randstr();
+        } elseif ($v === true) {
+            $output .= 'true';
+        } elseif ($v === false) {
+            $output .= 'false';
+        } elseif (is_array($v) || is_object($v)) {
+            $output .= json_encode($v, JSON_PRETTY_PRINT);
         } else {
-            // Web display pattern
-            echo "<pre style='background:#263238;color:white;padding:10px;margin:20px 0px'>";
-            if ($v === null) {
-                echo 'null';
-            } elseif ($v === 'RANDOM_STR') {
-                echo randstr();
-            } elseif ($v === true) {
-                echo 'true';
-            } elseif ($v === false) {
-                echo 'false';
-            } else {
-                if (is_array($v)) {
-                    $v = (json_encode($v, JSON_PRETTY_PRINT));
-                    $v = strip_tags($v);
-                    print_r($v);
-                } else {
-                    print_r($v);
-                }
-            }
-            echo "</pre>";
+            $output .= print_r($v, true);
+        }
+
+        if (isCli()) {
+            echo $output . "\n";
+        } else {
+            echo "<pre style='background:#263238;color:white;padding:10px;margin:20px 0px'>{$output}</pre>";
         }
     }
 }
@@ -71,73 +61,46 @@ if (!function_exists('dump')) {
 if (!function_exists('dd')) {
     function dd($v = 'RANDOM_STR')
     {
-        if (isCli()) {
-            // CMD/CLI display pattern - compact format
-            echo "\n[DD] ";
-            
-            if ($v === null) {
-                echo 'null';
-            } elseif ($v === 'RANDOM_STR') {
-                echo randstr();
-            } elseif ($v === true) {
-                echo 'true';
-            } elseif ($v === false) {
-                echo 'false';
-            } else {
-                if (is_array($v)) {
-                    $v = (json_encode($v, JSON_PRETTY_PRINT));
-                    $v = strip_tags($v);
-                    print_r($v);
-                } elseif (is_object($v)) {
-                    // Convert boolean properties to strings in the object
-                    // $v = convertBooleansToStrings(get_object_vars($v));
-                    
-                    // JSON encode the object
-                    $v = json_encode($v, JSON_PRETTY_PRINT);
-                    $v = strip_tags($v);
-                    print_r($v);
-                } else {
-                    print_r($v);
-                }
-            }
-            echo "\n[EXIT]\n";
-            exit;
-        } else {
-            // Web display pattern
-            echo "<pre style='background:#000000;color:white;padding:10px;margin:20px 0px'>";
-            if ($v === null) {
-                echo 'null';
-            } elseif ($v === 'RANDOM_STR') {
-                echo randstr();
-            } elseif ($v === true) {
-                echo 'true';
-            } elseif ($v === false) {
-                echo 'false';
-            } else {
-                if (is_array($v)) {
-                    $v = (json_encode($v, JSON_PRETTY_PRINT));
-                    $v = strip_tags($v);
-                    print_r($v);
-                } elseif (is_object($v)) {
-                    // Convert boolean properties to strings in the object
-                    // $v = convertBooleansToStrings(get_object_vars($v));
-                    
-                    // JSON encode the object
-                    $v = json_encode($v, JSON_PRETTY_PRINT);
-                    $v = strip_tags($v);
-                    print_r($v);
-                } else {
-                    print_r($v);
-                }
-            }
-            echo "</pre>";
-            echo "<hr>";
-            echo "EXIT";
-            echo "<hr>";
-            exit;
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+        $traceOutput = [];
+
+        foreach ($trace as $i => $t) {
+            $file = $t['file'] ?? 'unknown file';
+            $line = $t['line'] ?? 'unknown line';
+            $func = $t['function'] ?? '';
+            $class = $t['class'] ?? '';
+            $type = $t['type'] ?? '';
+            $traceOutput[] = "#$i $file($line): $class$type$func()";
         }
+
+        $output = "[DD] Backtrace:\n" . implode("\n", $traceOutput) . "\n\n";
+
+        // Value output
+        if ($v === null) {
+            $output .= 'null';
+        } elseif ($v === 'RANDOM_STR') {
+            $output .= randstr();
+        } elseif ($v === true) {
+            $output .= 'true';
+        } elseif ($v === false) {
+            $output .= 'false';
+        } elseif (is_array($v) || is_object($v)) {
+            $output .= json_encode($v, JSON_PRETTY_PRINT);
+        } else {
+            $output .= print_r($v, true);
+        }
+
+        if (isCli()) {
+            echo $output . "\n[EXIT]\n";
+        } else {
+            echo "<pre style='background:#000000;color:white;padding:10px;margin:20px 0px'>{$output}</pre>";
+            echo "<hr>EXIT<hr>";
+        }
+        exit;
     }
 }
+
+
 
 function timestamp(){
     return date('Y-m-d H:i:s');
@@ -889,4 +852,47 @@ function validateDbfFile($path) {
         ProgressDisplay::warning("DBF validation failed: " . $e->getMessage());
         return false;
     }
+}
+
+
+function sqlWhereUpdatedOn($last_synced_at)
+{
+    return " (
+        STR_TO_DATE(UPDATED_ON, '%Y-%m-%dT%H:%i:%s') >
+        CONVERT_TZ('$last_synced_at', '+08:00', '+00:00')
+    )
+    ";
+}
+function keyBy(array $arr, string $key): array
+{
+    $new_arr = [];
+
+    foreach ($arr as $item) {
+        if (is_array($item) && isset($item[$key])) {
+            $new_arr[$item[$key]] = $item;
+        } elseif (is_object($item) && isset($item->$key)) {
+            $new_arr[$item->$key] = $item;
+        }
+    }
+
+    return $new_arr;
+}
+
+function toTimestamp($dt)
+{
+    if ($dt === null || $dt === '') {
+        return 0;
+    }
+
+    // ISO format with T = UTC
+    if (strpos($dt, 'T') !== false) {
+        // 2026-01-19T02:17:30  (UTC)
+        $dt = str_replace('T', ' ', $dt);
+
+        // convert UTC → MYT (+8)
+        return strtotime($dt . ' UTC') + (8 * 3600);
+    }
+
+    // Normal datetime assumed already in MYT
+    return strtotime($dt);
 }

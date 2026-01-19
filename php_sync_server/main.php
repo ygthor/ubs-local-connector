@@ -182,7 +182,10 @@ try {
                                  WHERE (DATE(CREATED_ON) = '$resync_date' OR DATE(UPDATED_ON) = '$resync_date')";
                 } else {
                     // Normal sync: Only records updated after last sync
-                    $countSql = "SELECT COUNT(*) as total FROM `$ubs_table` WHERE UPDATED_ON > '$last_synced_at'";
+                    $countSql = "
+                        SELECT COUNT(*) as total FROM `$ubs_table` WHERE 1
+                        AND ".sqlWhereUpdatedOn($last_synced_at)."
+                    ";
                 }
                 
                 $ubsCount = $db->first($countSql)['total'];
@@ -441,9 +444,10 @@ try {
                 }
             }
             
+            $totalCount = $ubsCount + $remoteCount;
             // Process UBS data in chunks if it exists
             // ✅ FORCE SYNC: Use different WHERE clause for force sync tables
-            while ($offset < $ubsCount && $iterationCount < $maxIterations) {
+            while ($offset < $totalCount && $iterationCount < $maxIterations) {
               
                 $iterationCount++;
                 
@@ -466,7 +470,8 @@ try {
                     // Normal sync: Only records updated after last sync
                     $sql = "
                         SELECT * FROM `$ubs_table` 
-                        WHERE UPDATED_ON > '$last_synced_at'
+                        WHERE 1
+                        AND ".sqlWhereUpdatedOn($last_synced_at)."
                         ORDER BY UPDATED_ON ASC
                         LIMIT $chunkSize OFFSET $offset
                     ";

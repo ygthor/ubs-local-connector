@@ -288,7 +288,7 @@ class mysql
 			} else {
 				// Key column doesn't exist, skip this row or use a fallback
 				// Log warning for debugging
-				dump("⚠️  Warning: Column '$col_key' not found in pluck result. Available columns: " . implode(', ', array_keys($row)));
+				// dump("⚠️  Warning: Column '$col_key' not found in pluck result. Available columns: " . implode(', ', array_keys($row)));
 			}
 		} else {
 			$data[] = $row_col_value;
