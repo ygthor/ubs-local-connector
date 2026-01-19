@@ -82,7 +82,6 @@ if (!file_exists($dbfPath)) {
 // 2b. Get LOCAL MySQL data (this is what main.php uses!)
 echo "\n[2b] LOCAL MySQL data (ubs_ubsstk2015_artran):\n";
 $db = new mysql;
-$db->connect_local();
 $localRecord = $db->first("SELECT REFNO, DATE, UPDATED_ON, FPERIOD FROM ubs_ubsstk2015_artran WHERE REFNO='$refNo'");
 $db->close();
 
