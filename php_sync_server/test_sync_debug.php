@@ -17,6 +17,17 @@ if (!$referenceNo) {
 
 echo "=== SYNC DEBUG FOR $referenceNo ===\n";
 
+// 0. Check last_synced_at for artran
+echo "\n[0] Sync metadata:\n";
+$db = new mysql;
+$lastSynced = $db->first("SELECT last_synced_at FROM sync_metadata WHERE table_name='ubs_ubsstk2015_artran'");
+$db->close();
+if ($lastSynced) {
+    echo "   last_synced_at: " . $lastSynced['last_synced_at'] . "\n";
+} else {
+    echo "   last_synced_at: NOT SET\n";
+}
+
 // 1. Get Remote data
 echo "\n[1] Remote data:\n";
 $db = new mysql;
