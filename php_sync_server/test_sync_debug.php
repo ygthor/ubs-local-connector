@@ -51,9 +51,20 @@ if (!file_exists($dbfPath)) {
             $refno = trim($record->get('REFNO') ?? '');
             if ($refno === $referenceNo) {
                 $found = true;
+                $dateVal = $record->get('DATE');
+                $updatedOnVal = $record->get('UPDATED_ON');
+
+                // Handle DateTime objects
+                if ($dateVal instanceof DateTime) {
+                    $dateVal = $dateVal->format('Y-m-d H:i:s');
+                }
+                if ($updatedOnVal instanceof DateTime) {
+                    $updatedOnVal = $updatedOnVal->format('Y-m-d H:i:s');
+                }
+
                 echo "   REFNO: " . $refno . "\n";
-                echo "   DATE: " . ($record->get('DATE') ?? 'NULL') . "\n";
-                echo "   UPDATED_ON: " . ($record->get('UPDATED_ON') ?? 'NULL') . "\n";
+                echo "   DATE: " . ($dateVal ?? 'NULL') . "\n";
+                echo "   UPDATED_ON: " . ($updatedOnVal ?? 'NULL') . "\n";
                 echo "   FPERIOD: " . ($record->get('FPERIOD') ?? 'NULL') . "\n";
                 break;
             }
@@ -85,6 +96,11 @@ if ($remote && isset($remote['updated_at'])) {
                 if ($refno === $referenceNo) {
                     $foundForCompare = true;
                     $ubs_updated_on = $record->get('UPDATED_ON');
+
+                    // Handle DateTime objects
+                    if ($ubs_updated_on instanceof DateTime) {
+                        $ubs_updated_on = $ubs_updated_on->format('Y-m-d H:i:s');
+                    }
 
                     // Handle invalid timestamps (same logic as syncEntity)
                     if (empty($ubs_updated_on) || $ubs_updated_on === '0000-00-00' ||
