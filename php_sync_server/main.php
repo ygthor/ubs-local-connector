@@ -25,10 +25,10 @@ if (isSyncRunning('python')) {
 }
 
 // Acquire PHP sync lock
-if (!acquireSyncLock('php')) {
-    ProgressDisplay::error("❌ PHP sync is already running or lock file exists. Please check and remove lock file if needed.");
-    exit(1);
-}
+// if (!acquireSyncLock('php')) {
+//     ProgressDisplay::error("❌ PHP sync is already running or lock file exists. Please check and remove lock file if needed.");
+//     exit(1);
+// }
 
 // Register shutdown function to release lock
 register_shutdown_function(function() {
