@@ -9,17 +9,17 @@ import atexit
 
 def main():
     # Check if PHP sync is running
-    if is_sync_running('php'):
-        print("❌ PHP sync is currently running. Please wait for it to complete.", flush=True)
-        sys.exit(1)
+    # if is_sync_running('php'):
+    #     print("❌ PHP sync is currently running. Please wait for it to complete.", flush=True)
+    #     sys.exit(1)
     
     # Acquire Python sync lock
-    if not acquire_sync_lock('python'):
-        print("❌ Python sync is already running or lock file exists. Please check and remove lock file if needed.", flush=True)
-        sys.exit(1)
+    # if not acquire_sync_lock('python'):
+    #     print("❌ Python sync is already running or lock file exists. Please check and remove lock file if needed.", flush=True)
+    #     sys.exit(1)
     
     # Register cleanup function to release lock on exit
-    atexit.register(lambda: release_sync_lock('python'))
+    # atexit.register(lambda: release_sync_lock('python'))
     
     try:
         create_sync_logs_table()
