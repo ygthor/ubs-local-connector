@@ -412,13 +412,19 @@ try {
                         }
 
                         // Fetch only matching UBS records (not all) for timestamp comparison
+                        // Only for simple keys (artran, customers, etc.) - skip for composite keys (ictran)
                         $matchingUbsData = [];
-                        if (!empty($remote_keys_to_check)) {
+                        $is_composite_ubs_key = is_array($ubs_key);
+
+                        if (!$is_composite_ubs_key && !empty($remote_keys_to_check)) {
+                            // Simple key: use WHERE IN query
                             $keys_str = implode(',', $remote_keys_to_check);
                             $matchingUbsSql = "SELECT * FROM `$ubs_table` WHERE `$ubs_key` IN ($keys_str)";
                             $matchingUbsData = $db->get($matchingUbsSql);
                             ProgressDisplay::info("🔍 Fetched " . count($matchingUbsData) . " matching UBS records for comparison");
                         }
+                        // For composite keys (ictran), $matchingUbsData stays empty
+                        // syncEntity will treat all remote records as "new" and sync them to UBS
 
                         if (!empty($allRemoteData)) {
                             // syncEntity will compare timestamps and decide what needs syncing
