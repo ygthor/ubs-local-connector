@@ -72,13 +72,41 @@ function ensureValidTimestamp(&$record, $field_name)
 }
 
 /**
+ * Extract and format date to YYYY-MM-DD format
+ * Handles timestamps, date strings, DateTime objects, and other formats
+ *
+ * @param mixed $dateValue The date value (timestamp, string, etc.)
+ * @param string $fallback Fallback date if parsing fails (default: today)
+ * @return string Date in YYYY-MM-DD format
+ */
+function extractDate($dateValue, $fallback = null)
+{
+    if ($fallback === null) {
+        $fallback = date('Y-m-d');
+    }
+
+    if (empty($dateValue)) {
+        return $fallback;
+    }
+
+    if (is_numeric($dateValue)) {
+        // Timestamp
+        return date('Y-m-d', $dateValue);
+    }
+
+    // String or DateTime or other formats
+    $timestamp = strtotime($dateValue);
+    return $timestamp ? date('Y-m-d', $timestamp) : $fallback;
+}
+
+/**
  * Get FPERIOD from order date based on periods table in remote database
  * FPERIOD is calculated by counting months from the earliest period's start_date
  * Example: If earliest period starts 2025-01, then:
  *   - 2025-01 = 1
  *   - 2025-02 = 2
  *   - 2026-01 = 13
- * 
+ *
  * @param string $orderDate The order date in format YYYY-MM-DD or YYYY-MM-DD HH:MM:SS
  * @return int FPERIOD value
  */
@@ -2175,52 +2203,30 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $converted['CREDITAMT'] = 0;
             }
 
-            if (isset($converted['DATE'])) {
-                $dateValue = $converted['DATE'];
             
-                if (is_numeric($dateValue)) {
-                    // Timestamp
-                    $converted['DATE'] = date('Y-m-d', $dateValue);
-                } else {
-                    // String or DateTime or other formats
-                    $timestamp = strtotime($dateValue);
-                    $converted['DATE'] = $timestamp ? date('Y-m-d', $timestamp) : date('Y-m-d');
-                }
-            }
-            
-            $orderDate = isset($converted['DATE']) ? $converted['DATE'] : date('Y-m-d');
+
+            // Handle DATE field - use dataRow['order_date'] as source of truth
+            $converted['DATE'] = extractDate($dataRow['order_date'] ?? null);
+            $orderDate = $converted['DATE'];
             $converted['FPERIOD'] = getFPeriodFromDate($orderDate);
         }
 
         // Special handling for order_items syncing to ictran
         if ($remote_table_name == 'order_items') {
-            // Format DATE field if it's already set (from mapping) - ensure it's YYYY-MM-DD format
-            if (isset($converted['DATE'])) {
-                $dateValue = $converted['DATE'];
-            
-                if (is_numeric($dateValue)) {
-                    // Timestamp
-                    $converted['DATE'] = date('Y-m-d', $dateValue);
-                } else {
-                    // String or DateTime or other formats
-                    $timestamp = strtotime($dateValue);
-                    $converted['DATE'] = $timestamp ? date('Y-m-d', $timestamp) : date('Y-m-d');
-                }
-            }
+            // Format DATE field - use converted['DATE'] from mapping or fallback
+            $converted['DATE'] = extractDate($converted['DATE'] ?? null);
 
-            
             // Format TRANCODE as strpad 4 based on item_count (e.g., 1 => 0001)
             if (isset($converted['TRANCODE']) && isset($dataRow['item_count'])) {
                 $itemCount = (int)$dataRow['item_count'];
                 $converted['TRANCODE'] = str_pad($itemCount, 4, '0', STR_PAD_LEFT);
-            }else{
+            } else {
                 $converted['TRANCODE'] = '0000';
             }
 
             // Get FPERIOD based on order date and periods table
             // 1 = 2025-01, 2 = 2025-02, 13 = 2026-01, etc.
-            $orderDate = isset($converted['DATE']) ? $converted['DATE'] : date('Y-m-d');
-            $converted['FPERIOD'] = getFPeriodFromDate($orderDate);
+            $converted['FPERIOD'] = getFPeriodFromDate($converted['DATE']);
 
             // Set JOB_VALUE and JOB2_VALUE to 0
             $converted['JOB_VALUE'] = '0';
