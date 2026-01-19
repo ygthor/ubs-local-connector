@@ -37,7 +37,8 @@ if (!$remote) {
 // 2. Get UBS data
 echo "\n[2] UBS data (artran.dbf):\n";
 $arr = parseUbsTable('ubs_ubsstk2015_artran');
-$dbfPath = env('UBS_PATH') . '/' . strtoupper($arr['database']) . '/' . $arr['table'] . '.dbf';
+$directory = strtoupper($arr['database']);
+$dbfPath = "C:/$directory/" . ENV::DBF_SUBPATH . "/artran.dbf";
 echo "   DBF path: $dbfPath\n";
 
 if (!file_exists($dbfPath)) {
