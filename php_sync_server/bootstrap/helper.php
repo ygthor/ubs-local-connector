@@ -859,7 +859,7 @@ function sqlWhereUpdatedOn($last_synced_at)
 {
     return " (
         STR_TO_DATE(UPDATED_ON, '%Y-%m-%dT%H:%i:%s') >
-        CONVERT_TZ('$last_synced_at', '+08:00', '+00:00')
+        CONVERT_TZ('$last_synced_at', '+00:00', '+00:00')
     )
     ";
 }
