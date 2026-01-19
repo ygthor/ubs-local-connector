@@ -2207,8 +2207,7 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
             // Handle DATE field - use dataRow['order_date'] as source of truth
             $converted['DATE'] = extractDate($dataRow['order_date'] ?? null);
-            $orderDate = $converted['DATE'];
-            $converted['FPERIOD'] = getFPeriodFromDate($orderDate);
+            $converted['FPERIOD'] = getFPeriodFromDate($converted['DATE']);
         }
 
         // Special handling for order_items syncing to ictran
