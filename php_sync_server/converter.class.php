@@ -18,14 +18,14 @@ class Converter
             // 'ubs_ubsacc2015_ictran',
 
 
-            // 'ubs_ubsstk2015_arcust',
+            'ubs_ubsstk2015_arcust',
             // 'ubs_ubsstk2015_apvend',
             // 'ubs_ubsstk2015_icarea',
-            // 'ubs_ubsstk2015_icitem', // product/item
-            // 'ubs_ubsstk2015_icgroup', // product group - synced from icgroup.dbf
+            'ubs_ubsstk2015_icitem', // product/item
+            'ubs_ubsstk2015_icgroup', // product group - synced from icgroup.dbf
             // 'ubs_ubsacc2015_arcust',
             'ubs_ubsstk2015_artran', // invoice
-            // 'ubs_ubsstk2015_ictran', // invoice item
+            'ubs_ubsstk2015_ictran', // invoice item
 
             
         ];
