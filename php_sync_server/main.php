@@ -397,18 +397,32 @@ try {
                         }
                         unset($allUbsKeysData);
                         
-                        // Find missing records
+                        // ✅ FIX: Fetch matching UBS records for proper timestamp comparison
+                        // This handles both INSERT (new records) and UPDATE (existing but older in UBS)
                         $remote_key = Converter::primaryKey($remote_table_name);
-                        $missing_records = [];
+                        $ubs_key = Converter::primaryKey($ubs_table);
+
+                        // Get the keys from remote data
+                        $remote_keys_to_check = [];
                         foreach ($allRemoteData as $remote_row) {
                             $remoteKey = $remote_row[$remote_key] ?? '';
-                            if (!isset($allUbsKeys[$remoteKey])) {
-                                $missing_records[] = $remote_row;
+                            if (!empty($remoteKey)) {
+                                $remote_keys_to_check[] = "'" . $db->escape($remoteKey) . "'";
                             }
                         }
-                        
-                        if (!empty($missing_records)) {
-                            $comparedData = syncEntity($ubs_table, [], $missing_records);
+
+                        // Fetch only matching UBS records (not all) for timestamp comparison
+                        $matchingUbsData = [];
+                        if (!empty($remote_keys_to_check)) {
+                            $keys_str = implode(',', $remote_keys_to_check);
+                            $matchingUbsSql = "SELECT * FROM `$ubs_table` WHERE `$ubs_key` IN ($keys_str)";
+                            $matchingUbsData = $db->get($matchingUbsSql);
+                            ProgressDisplay::info("🔍 Fetched " . count($matchingUbsData) . " matching UBS records for comparison");
+                        }
+
+                        if (!empty($allRemoteData)) {
+                            // syncEntity will compare timestamps and decide what needs syncing
+                            $comparedData = syncEntity($ubs_table, $matchingUbsData, $allRemoteData);
                             $ubs_data_to_upsert = $comparedData['ubs_data'];
                             
                             if (!empty($ubs_data_to_upsert)) {
@@ -437,7 +451,7 @@ try {
                                 $tableStats[$ubs_table]['ubs']['updates'] = array_merge($tableStats[$ubs_table]['ubs']['updates'], $tempUbsStats['updates']);
                             }
                         }
-                        unset($allUbsKeys, $missing_records, $allRemoteData);
+                        unset($allUbsKeys, $matchingUbsData, $allRemoteData, $remote_keys_to_check);
                     }
                 } catch (Exception $e) {
                     ProgressDisplay::warning("⚠️  $ubs_table: " . $e->getMessage());
