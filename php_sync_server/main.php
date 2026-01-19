@@ -710,7 +710,7 @@ try {
                             
                             if (!empty($ubs_data_to_upsert)) {
                                 $tempUbsStats2 = ['inserts' => [], 'updates' => []];
-                                executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert, &$tempUbsStats2) {
+                                executeSyncWithTransaction(function() use ($ubs_table, $ubs_data_to_upsert, &$tempUbsStats2, $isArtran) {
                                     $tableLabel = $isArtran ? 'orders' : 'order_items';
                                     ProgressDisplay::info("⬇️ " . ucfirst($tableLabel) . ": Syncing " . count($ubs_data_to_upsert) . " missing remote→UBS record(s)");
                                     $tempUbsStats2 = batchUpsertUbs($ubs_table, $ubs_data_to_upsert);
