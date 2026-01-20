@@ -2624,13 +2624,24 @@ function syncEntity($entity, $ubs_data, $remote_data)
     }
 
     // ✅ OPTIMIZATION: If we have UBS data and large remote_data, filter remote_data to only matching keys
+    // ✅ FIX: Handle composite keys for remote data filtering
+    $is_composite_remote_key = is_array($remote_key);
     $shouldFilterRemote = !empty($ubs_keys) && count($remote_data) > 1000;
     if ($shouldFilterRemote) {
         dump("⚡ Optimizing: Filtering remote_data from " . count($remote_data) . " records to only matching keys...");
         $ubs_key_set = array_flip(array_keys($ubs_keys)); // Fast lookup
         $filtered_remote_data = [];
         foreach ($remote_data as $row) {
-            $key = $row[$remote_key] ?? '';
+            if ($is_composite_remote_key) {
+                // Composite key: build key from multiple fields
+                $composite_parts = [];
+                foreach ($remote_key as $k) {
+                    $composite_parts[] = $row[$k] ?? '';
+                }
+                $key = implode('|', $composite_parts);
+            } else {
+                $key = $row[$remote_key] ?? '';
+            }
             if (!empty($key) && isset($ubs_key_set[$key])) {
                 $filtered_remote_data[] = $row;
             }
@@ -2642,8 +2653,18 @@ function syncEntity($entity, $ubs_data, $remote_data)
 
     // Process remote data
     // ✅ FIX: Handle duplicate keys properly - keep the most recent one
+    // ✅ FIX: Handle composite keys for remote data (e.g., ictran with reference_no + item_no)
     foreach ($remote_data as $row) {
-        $key = $row[$remote_key] ?? '';
+        if ($is_composite_remote_key) {
+            // Composite key: build key from multiple fields
+            $composite_parts = [];
+            foreach ($remote_key as $k) {
+                $composite_parts[] = $row[$k] ?? '';
+            }
+            $key = implode('|', $composite_parts);
+        } else {
+            $key = $row[$remote_key] ?? '';
+        }
 
         if (empty($key)) {
             continue; // Skip rows with empty keys

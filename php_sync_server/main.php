@@ -403,9 +403,20 @@ try {
                         $ubs_key = Converter::primaryKey($ubs_table);
 
                         // Get the keys from remote data
+                        // ✅ FIX: Handle both simple and composite keys
                         $remote_keys_to_check = [];
+                        $is_composite_remote_key = is_array($remote_key);
                         foreach ($allRemoteData as $remote_row) {
-                            $remoteKey = $remote_row[$remote_key] ?? '';
+                            if ($is_composite_remote_key) {
+                                // Composite key: build key from multiple fields
+                                $composite_parts = [];
+                                foreach ($remote_key as $k) {
+                                    $composite_parts[] = $remote_row[$k] ?? '';
+                                }
+                                $remoteKey = implode('|', $composite_parts);
+                            } else {
+                                $remoteKey = $remote_row[$remote_key] ?? '';
+                            }
                             if (!empty($remoteKey)) {
                                 $remote_keys_to_check[] = "'" . $db->escape($remoteKey) . "'";
                             }

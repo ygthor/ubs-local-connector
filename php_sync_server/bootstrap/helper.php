@@ -417,12 +417,12 @@ function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null, $resyncDate 
             } elseif ($table === 'ubs_ubsstk2015_ictran') {
                 // Need to join with orders table to check order_date
                 if (strpos($sql, "FROM `$remote_table_name` WHERE") !== false) {
-                    $sql = str_replace("FROM `$remote_table_name` WHERE", 
-                        "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no WHERE", 
+                    $sql = str_replace("FROM `$remote_table_name` WHERE",
+                        "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no WHERE",
                         $sql);
                 } elseif (strpos($sql, "FROM `$remote_table_name`") !== false) {
-                    $sql = str_replace("FROM `$remote_table_name`", 
-                        "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no", 
+                    $sql = str_replace("FROM `$remote_table_name`",
+                        "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no",
                         $sql);
                 }
                 $sql = str_replace("SELECT *", "SELECT oi.*", $sql);
@@ -448,19 +448,19 @@ function fetchRemoteDataByKeys($table, $keys, $updatedAfter = null, $resyncDate 
                     // Replace FROM clause to add JOIN (handle both WHERE and no WHERE cases)
                     if (strpos($sql, "FROM `$remote_table_name` WHERE") !== false) {
                         // Has WHERE clause - insert JOIN before WHERE
-                        $sql = str_replace("FROM `$remote_table_name` WHERE", 
-                            "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no WHERE", 
+                        $sql = str_replace("FROM `$remote_table_name` WHERE",
+                            "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no WHERE",
                             $sql);
                     } elseif (strpos($sql, "FROM `$remote_table_name`") !== false) {
                         // No WHERE clause - replace FROM
-                        $sql = str_replace("FROM `$remote_table_name`", 
-                            "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no", 
+                        $sql = str_replace("FROM `$remote_table_name`",
+                            "FROM `$remote_table_name` oi INNER JOIN orders o ON oi.reference_no = o.reference_no",
                             $sql);
                     }
-                    
+
                     // Update SELECT to use oi.* to avoid duplicate columns from JOIN
                     $sql = str_replace("SELECT *", "SELECT oi.*", $sql);
-                    
+
                     // Add date filters
                     $sql .= " AND (oi.`$column_updated_at` > '" . $db->escape($updatedAfter) . "' OR o.order_date > '" . $db->escape($updatedAfter) . "')";
                 }
