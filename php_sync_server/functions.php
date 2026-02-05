@@ -54,6 +54,28 @@ function getMemoryUsage()
 }
 
 /**
+ * ✅ SAFE: Log sync errors for debugging
+ * @param string $message
+ * @param string|null $trace
+ */
+function logSyncError($message, $trace = null)
+{
+    $logDir = __DIR__ . '/logs/error';
+    if (!is_dir($logDir)) {
+        mkdir($logDir, 0755, true);
+    }
+
+    $logFile = $logDir . '/sync_errors.log';
+    $logEntry = "[" . date('Y-m-d H:i:s') . "] ERROR: " . $message . "\n";
+    if ($trace) {
+        $logEntry .= "TRACE: " . $trace . "\n";
+    }
+    $logEntry .= str_repeat('-', 80) . "\n";
+
+    file_put_contents($logFile, $logEntry, FILE_APPEND);
+}
+
+/**
  * Validates and sets timestamp field in record if missing or invalid
  * Preserves existing valid timestamps, only sets current time as fallback
  * 
@@ -179,10 +201,12 @@ class ProgressDisplay
     private static $startTime;
     private static $lastUpdate = 0;
     private static $updateInterval = 1; // Update every 1 second
+    private static $logFile = null;
 
     public static function start($message = "Starting process...")
     {
         self::$startTime = microtime(true);
+        self::initLogFile();
         self::display($message, 0, 0, true);
     }
 
@@ -247,22 +271,27 @@ class ProgressDisplay
         echo "📊 Total Time: " . self::formatTime($elapsed) . "\n";
         echo "💾 Peak Memory: " . $memory['memory_peak_mb'] . "MB\n";
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+
+        self::log("COMPLETE: " . $message);
     }
 
     public static function error($message)
     {
         echo "\n❌ ERROR: " . $message . "\n";
+        self::log("ERROR: " . $message);
     }
 
     public static function warning($message)
     {
         // Suppress warnings for cleaner output - only show critical warnings
         // echo "\n⚠️  WARNING: " . $message . "\n";
+        self::log("WARNING: " . $message);
     }
 
     public static function info($message)
     {
         echo "ℹ️  INFO: " . $message . "\n";
+        self::log("INFO: " . $message);
     }
 
     private static function calculateETA($current, $total, $elapsed)
@@ -291,6 +320,25 @@ class ProgressDisplay
             $minutes = floor(($seconds % 3600) / 60);
             return $hours . "h " . $minutes . "m";
         }
+    }
+
+    private static function initLogFile()
+    {
+        if (self::$logFile) {
+            return;
+        }
+        $logDir = __DIR__ . '/logs/progress';
+        if (!is_dir($logDir)) {
+            mkdir($logDir, 0755, true);
+        }
+        self::$logFile = $logDir . '/sync_progress_' . date('Y-m-d_His') . '.log';
+    }
+
+    private static function log($message)
+    {
+        self::initLogFile();
+        $entry = "[" . date('Y-m-d H:i:s') . "] " . $message . "\n";
+        file_put_contents(self::$logFile, $entry, FILE_APPEND);
     }
 }
 

@@ -1049,8 +1049,8 @@ try {
     
 } catch (Exception $e) {
     ProgressDisplay::error("Sync process failed: " . $e->getMessage());
+    logSyncError("Sync process failed: " . $e->getMessage(), $e->getTraceAsString());
     releaseSyncLock('php');
-    exit(1);
 } finally {
     // Ensure lock is released
     releaseSyncLock('php');
