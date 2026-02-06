@@ -9,6 +9,7 @@ import time
 import shutil
 from datetime import datetime
 import platform
+import atexit
 
 # Try to import psutil for process checking, fallback to tasklist if not available
 try:
@@ -43,6 +44,20 @@ class SyncGUI:
         self.current_file_num = 0
         self.current_table_num = 0
         self.tables_found = False
+
+        # Log behavior (prevent UI crash from extremely verbose output)
+        self.max_log_lines = 4000
+        self.log_trim_chunk = 200
+        self.max_log_line_length = 500
+        self.drop_debug_lines = True
+        self.log_line_count = 0
+        self.log_queue = []
+        self.log_flush_scheduled = False
+        self.log_flush_interval_ms = 300
+        self.gui_show_summaries_only = True
+        self.log_file = None
+        self.log_file_path = None
+        self._init_log_file()
         
         # Programs to detect (same as PowerShell script)
         self.target_programs = ["cpl", "vstk", "daccount"]
@@ -383,6 +398,30 @@ class SyncGUI:
         self.close_btn = tk.Button(self.root, text="Close", 
                                    command=self.root.quit, state="disabled")
         self.close_btn.pack(pady=10)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _init_log_file(self):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        log_dir = os.path.join(script_dir, "logs")
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.log_file_path = os.path.join(log_dir, f"gui_sync_{timestamp}.log")
+            self.log_file = open(self.log_file_path, "a", encoding="utf-8", buffering=1)
+            atexit.register(self._close_log_file)
+        except Exception:
+            self.log_file = None
+
+    def _close_log_file(self):
+        try:
+            if self.log_file:
+                self.log_file.close()
+        except Exception:
+            pass
+
+    def _on_close(self):
+        self._close_log_file()
+        self.root.destroy()
     
     def update_progress(self, percent, status, detail="", phase=""):
         """Thread-safe progress update"""
@@ -394,12 +433,57 @@ class SyncGUI:
             if phase:
                 self.phase_label['text'] = phase
             if detail:
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                self.log_text.insert(tk.END, f"[{timestamp}] {detail}\n")
-                self.log_text.see(tk.END)
-            self.root.update()
+                self.append_log(detail)
         
         self.root.after(0, update)
+
+    def should_log_line(self, line):
+        if self.drop_debug_lines and '🔍 DEBUG' in line:
+            return False
+        return True
+
+    def is_summary_line(self, line):
+        if not self.gui_show_summaries_only:
+            return True
+        summary_keywords = [
+            "INFO:", "WARN", "WARNING", "ERROR", "FAILED", "SUCCESS",
+            "Starting", "Completed", "Processing table", "Found", "SYNC",
+            "✅", "❌", "⚠️", "⬆️", "⬇️", "📊", "📦"
+        ]
+        return any(k in line for k in summary_keywords)
+
+    def append_log(self, detail):
+        if not self.should_log_line(detail):
+            return
+        if self.log_file:
+            try:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.log_file.write(f"[{timestamp}] {detail}\n")
+            except Exception:
+                pass
+        if not self.is_summary_line(detail):
+            return
+        if self.max_log_line_length and len(detail) > self.max_log_line_length:
+            detail = detail[:self.max_log_line_length] + "..."
+        self.log_queue.append(detail)
+        if not self.log_flush_scheduled:
+            self.log_flush_scheduled = True
+            self.root.after(self.log_flush_interval_ms, self._flush_log_queue)
+
+    def _flush_log_queue(self):
+        if not self.log_queue:
+            self.log_flush_scheduled = False
+            return
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        lines = [f"[{timestamp}] {line}" for line in self.log_queue]
+        self.log_queue.clear()
+        self.log_text.insert(tk.END, "\n".join(lines) + "\n")
+        self.log_line_count += len(lines)
+        if self.log_line_count > self.max_log_lines:
+            self.log_text.delete("1.0", f"{self.log_trim_chunk + 1}.0")
+            self.log_line_count -= self.log_trim_chunk
+        self.log_text.see(tk.END)
+        self.log_flush_scheduled = False
     
     def parse_python_progress(self, line):
         """Parse Python sync output for progress"""
@@ -781,4 +865,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = SyncGUI(root)
     root.mainloop()
-
