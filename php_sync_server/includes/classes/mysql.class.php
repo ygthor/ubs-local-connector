@@ -76,7 +76,7 @@ class mysql
 		];
 	}
 
-	private function logSqlError($context, $sql, $error)
+	private function logSqlError($context, $sql, $error, $trace = null)
 	{
 		$caller = $this->extractCallerFrame();
 		$logDir = dirname(__DIR__, 2) . '/logs/error';
@@ -88,9 +88,17 @@ class mysql
 		$entry .= "Error: " . $error . "\n";
 		$entry .= "Caller: " . $caller['file'] . ":" . $caller['line'] . " (" . $caller['function'] . ")\n";
 		$entry .= "SQL: " . $sql . "\n";
+		if (!empty($trace)) {
+			$entry .= "Trace: " . $trace . "\n";
+		}
 		$entry .= str_repeat('-', 100) . "\n";
 
-		@file_put_contents($logDir . '/mysql_query_errors.log', $entry, FILE_APPEND);
+		$logFile = $logDir . '/mysql_query_errors.log';
+		$written = @file_put_contents($logFile, $entry, FILE_APPEND);
+		if ($written === false) {
+			// Fallback to PHP error log if file write is not available.
+			error_log("MYSQL $context ERROR (log write failed: $logFile)\n" . $entry);
+		}
 	}
 
 	function insert($table_name, $arr)
@@ -298,7 +306,12 @@ class mysql
 	{
 		if (is_string($rs)) {
 			$sql = $rs;
-			$rs = $this->query($sql);
+			try {
+				$rs = $this->query($sql);
+			} catch (\Throwable $e) {
+				$this->logSqlError('FIRST', $sql, $e->getMessage(), $e->getTraceAsString());
+				throw $e;
+			}
 			if ($rs == false) {
 				$error = mysqli_error($this->con);
 				$this->logSqlError('FIRST', $sql, $error);
