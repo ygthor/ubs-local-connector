@@ -2195,9 +2195,12 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
         $db = new mysql;
         $db->connect_remote();
         foreach ($converted as $key => $val) {
-            $check_table_link = strpos($val, '|');
+            // Resolve linked fields ONLY from mapping definitions (e.g. orders|type),
+            // never from runtime data values (customer text may contain '|').
+            $mapValue = $map[$key] ?? null;
+            $check_table_link = is_string($mapValue) ? strpos($mapValue, '|') : false;
             if ($check_table_link !== false) {
-                $explode = explode('|', $val);
+                $explode = explode('|', $mapValue);
                 $table = $explode[0];
                 $field = $explode[1];
 
