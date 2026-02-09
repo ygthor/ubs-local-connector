@@ -52,6 +52,47 @@ class mysql
 		mysqli_close($this->con);
 	}
 
+	private function extractCallerFrame()
+	{
+		$trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 10);
+		foreach ($trace as $frame) {
+			$file = $frame['file'] ?? '';
+			if (empty($file)) {
+				continue;
+			}
+			if (strpos($file, 'mysql.class.php') !== false) {
+				continue;
+			}
+			return [
+				'file' => $file,
+				'line' => (int)($frame['line'] ?? 0),
+				'function' => $frame['function'] ?? ''
+			];
+		}
+		return [
+			'file' => __FILE__,
+			'line' => 0,
+			'function' => 'unknown'
+		];
+	}
+
+	private function logSqlError($context, $sql, $error)
+	{
+		$caller = $this->extractCallerFrame();
+		$logDir = dirname(__DIR__, 2) . '/logs/error';
+		if (!is_dir($logDir)) {
+			@mkdir($logDir, 0755, true);
+		}
+
+		$entry = "[" . date('Y-m-d H:i:s') . "] MYSQL $context ERROR\n";
+		$entry .= "Error: " . $error . "\n";
+		$entry .= "Caller: " . $caller['file'] . ":" . $caller['line'] . " (" . $caller['function'] . ")\n";
+		$entry .= "SQL: " . $sql . "\n";
+		$entry .= str_repeat('-', 100) . "\n";
+
+		@file_put_contents($logDir . '/mysql_query_errors.log', $entry, FILE_APPEND);
+	}
+
 	function insert($table_name, $arr)
 	{
 		$columns_arr = [];
@@ -259,9 +300,16 @@ class mysql
 			$sql = $rs;
 			$rs = $this->query($sql);
 			if ($rs == false) {
+				$error = mysqli_error($this->con);
+				$this->logSqlError('FIRST', $sql, $error);
 				dump2("ERR: " . $sql);
-				dump2("MYSQL ERROR FIRST: " . mysqli_error($this->con));
+				dump2("MYSQL ERROR FIRST: " . $error);
+				return null;
 			}
+		}
+
+		if ($rs === false || $rs === null) {
+			return null;
 		}
 
 		//TODO VALIDATE IS RS
