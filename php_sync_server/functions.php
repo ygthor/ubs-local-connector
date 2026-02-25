@@ -157,7 +157,6 @@ function getFPeriodFromDate($orderDate)
         $sql = "SELECT start_date, end_date FROM periods 
                 WHERE start_date <= '$orderDateFormatted' 
                 AND end_date >= '$orderDateFormatted'
-                AND is_active = 1
                 LIMIT 1";
         
         $period = $db->first($sql);
@@ -165,7 +164,7 @@ function getFPeriodFromDate($orderDate)
         if ($period && isset($period['start_date']) && isset($period['end_date'])) {
             // Period found - calculate FPERIOD based on position
             // Get the earliest period's start_date as the base
-            $baseSQL = "SELECT start_date FROM periods WHERE is_active = 1 ORDER BY start_date ASC LIMIT 1";
+            $baseSQL = "SELECT start_date FROM periods WHERE ORDER BY start_date ASC LIMIT 1";
             $basePeriod = $db->first($baseSQL);
             $db->close();
             
