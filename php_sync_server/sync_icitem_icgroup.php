@@ -40,8 +40,9 @@ try {
         'synced_at' => date('Y-m-d H:i:s')
     ]);
     
-} catch (Exception $e) {
+} catch (\Throwable $e) {
     ProgressDisplay::error("❌ Sync failed: " . $e->getMessage());
+    logSyncError("sync_icitem_icgroup failed: " . $e->getMessage(), $e->getTraceAsString());
     releaseSyncLock('php');
     exit(1);
 }

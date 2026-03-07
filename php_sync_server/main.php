@@ -1047,7 +1047,7 @@ try {
     ProgressDisplay::info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     ProgressDisplay::complete("🎉 Sync process completed successfully! All " . count($syncResults) . " tables processed.");
     
-} catch (Exception $e) {
+} catch (\Throwable $e) {
     ProgressDisplay::error("Sync process failed: " . $e->getMessage());
     logSyncError("Sync process failed: " . $e->getMessage(), $e->getTraceAsString());
     releaseSyncLock('php');

@@ -21,6 +21,46 @@ function initializeSyncEnvironment()
     error_reporting(E_ERROR | E_PARSE);
     ini_set('display_errors', 0);
 
+    // Register global exception/fatal handlers once per process
+    if (!defined('SYNC_GLOBAL_ERROR_HANDLERS_REGISTERED')) {
+        define('SYNC_GLOBAL_ERROR_HANDLERS_REGISTERED', true);
+
+        set_exception_handler(function ($exception) {
+            $message = "Uncaught " . get_class($exception) . ": " . $exception->getMessage();
+            $location = " in " . $exception->getFile() . ":" . $exception->getLine();
+            $fullMessage = $message . $location;
+
+            if (function_exists('logSyncError')) {
+                logSyncError($fullMessage, $exception->getTraceAsString());
+            }
+
+            if (class_exists('ProgressDisplay') && method_exists('ProgressDisplay', 'error')) {
+                ProgressDisplay::error($fullMessage);
+            }
+        });
+
+        register_shutdown_function(function () {
+            $error = error_get_last();
+            if (!$error) {
+                return;
+            }
+
+            $fatalTypes = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+            if (!in_array($error['type'], $fatalTypes, true)) {
+                return;
+            }
+
+            $message = "Fatal shutdown error [{$error['type']}]: {$error['message']} in {$error['file']}:{$error['line']}";
+            if (function_exists('logSyncError')) {
+                logSyncError($message);
+            }
+
+            if (class_exists('ProgressDisplay') && method_exists('ProgressDisplay', 'error')) {
+                ProgressDisplay::error($message);
+            }
+        });
+    }
+
     // Log configuration - suppressed for cleaner output
     // if (function_exists('dump')) {
     //     dump("🚀 Sync environment initialized:");
@@ -394,17 +434,20 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
 
     // ✅ SAFE: Use retry logic for reliability
     retryOperation(function () use ($table, $records, $batchSize, &$stats) {
-        $db = new mysql();
-        $db->connect_remote();
-
+        $db = null;
         $remote_table_name = Converter::table_convert_remote($table);
-        $primary_key = Converter::primaryKey($remote_table_name);
-        $Core = Core::getInstance();
-
         $totalRecords = count($records);
-        $processed = 0;
 
-        ProgressDisplay::info("Starting high-performance batch upsert for $remote_table_name ($totalRecords records)");
+        try {
+            $db = new mysql();
+            $db->connect_remote();
+
+            $primary_key = Converter::primaryKey($remote_table_name);
+            $Core = Core::getInstance();
+
+            $processed = 0;
+
+            ProgressDisplay::info("Starting high-performance batch upsert for $remote_table_name ($totalRecords records)");
 
         // Pre-process all records for better performance
         $processedRecords = [];
@@ -511,38 +554,71 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
             unset($record); // Break reference
         }
 
-        // Ensure primary key is correctly detected before proceeding
-        if (empty($primary_key)) {
-            ProgressDisplay::error("❌ No primary key defined for table: $remote_table_name");
-            return false;
-        }
-
-        // Use bulk upsert for better performance
-        // bulkUpsert() handles ALL deduplication safely - it deletes old duplicates and keeps newest
-        for ($i = 0; $i < count($processedRecords); $i += $batchSize) {
-            $batch = array_slice($processedRecords, $i, $batchSize);
-
-            // Bulk upsert using MySQL's ON DUPLICATE KEY UPDATE
-            $batchStats = null;
-            $db->bulkUpsert($remote_table_name, $batch, $primary_key, $batchStats);
-            
-            // Merge batch stats into overall stats
-            if ($batchStats !== null) {
-                $stats['inserts'] = array_merge($stats['inserts'], $batchStats['inserts']);
-                $stats['updates'] = array_merge($stats['updates'], $batchStats['updates']);
+            // Ensure primary key is correctly detected before proceeding
+            if (empty($primary_key)) {
+                ProgressDisplay::error("❌ No primary key defined for table: $remote_table_name");
+                return false;
             }
 
-            $processed += count($batch);
-            // ProgressDisplay::display("Processing $remote_table_name", $processed, $totalRecords);
+            // Use bulk upsert for better performance
+            // bulkUpsert() handles ALL deduplication safely - it deletes old duplicates and keeps newest
+            $totalBatches = (int)ceil(count($processedRecords) / $batchSize);
+            for ($i = 0; $i < count($processedRecords); $i += $batchSize) {
+                $batch = array_slice($processedRecords, $i, $batchSize);
+                $batchNo = (int)floor($i / $batchSize) + 1;
+                ProgressDisplay::info("⏳ Upserting $remote_table_name batch $batchNo/$totalBatches (" . count($batch) . " records)");
 
-            // Memory cleanup between batches
-            if ($i + $batchSize < count($processedRecords)) {
-                gc_collect_cycles();
+                try {
+                    // Bulk upsert using MySQL's ON DUPLICATE KEY UPDATE
+                    $batchStats = null;
+                    $db->bulkUpsert($remote_table_name, $batch, $primary_key, $batchStats);
+                } catch (\Throwable $e) {
+                    $batchSample = [];
+                    foreach (array_slice($batch, 0, 3) as $row) {
+                        if (is_array($primary_key)) {
+                            $parts = [];
+                            foreach ($primary_key as $pk) {
+                                $parts[] = trim($row[$pk] ?? '');
+                            }
+                            $batchSample[] = implode('|', $parts);
+                        } else {
+                            $batchSample[] = trim($row[$primary_key] ?? '');
+                        }
+                    }
+                    $sampleText = implode(', ', $batchSample);
+                    $contextMessage = "batchUpsertRemote failed for $remote_table_name batch $batchNo/$totalBatches (sample keys: $sampleText): " . $e->getMessage();
+                    ProgressDisplay::error("❌ " . $contextMessage);
+                    logSyncError($contextMessage, $e->getTraceAsString());
+                    throw $e;
+                }
+                
+                // Merge batch stats into overall stats
+                if ($batchStats !== null) {
+                    $stats['inserts'] = array_merge($stats['inserts'], $batchStats['inserts']);
+                    $stats['updates'] = array_merge($stats['updates'], $batchStats['updates']);
+                }
+
+                $processed += count($batch);
+                ProgressDisplay::info("✅ Completed $remote_table_name batch $batchNo/$totalBatches ($processed/$totalRecords records)");
+
+                // Memory cleanup between batches
+                if ($i + $batchSize < count($processedRecords)) {
+                    gc_collect_cycles();
+                }
+            }
+
+            ProgressDisplay::info("Completed high-performance batch upsert for $remote_table_name");
+            return true; // Success
+        } catch (\Throwable $e) {
+            $message = "batchUpsertRemote fatal for $remote_table_name: " . $e->getMessage();
+            ProgressDisplay::error("❌ " . $message);
+            logSyncError($message, $e->getTraceAsString());
+            throw $e;
+        } finally {
+            if ($db && method_exists($db, 'close')) {
+                $db->close();
             }
         }
-
-        ProgressDisplay::info("Completed high-performance batch upsert for $remote_table_name");
-        return true; // Success
     }, 3); // Max 3 retries
     
     return $stats;

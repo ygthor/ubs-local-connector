@@ -314,7 +314,7 @@ function retryOperation($operation, $maxRetries = 3, $baseDelay = 100000) {
     while ($attempt < $maxRetries) {
         try {
             return $operation();
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $lastException = $e;
             $attempt++;
             

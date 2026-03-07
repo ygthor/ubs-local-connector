@@ -46,8 +46,9 @@ try {
     }
     
     
-} catch (Exception $e) {
+} catch (\Throwable $e) {
     ProgressDisplay::error("❌ Sync failed: " . $e->getMessage());
+    logSyncError("sync_artran_ictran failed: " . $e->getMessage(), $e->getTraceAsString());
     releaseSyncLock('php');
     exit(1);
 }
