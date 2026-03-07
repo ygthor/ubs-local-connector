@@ -162,7 +162,6 @@ class mysql
 		}
 
 		$update_arr = [];
-		$callableLikeStringFields = [];
 
 		foreach ($arr as $k => $v) {
 			// ✅ FIX: Skip 'id' field - it's auto-increment and shouldn't be updated
@@ -175,34 +174,6 @@ class mysql
 				&& substr($v, 0, 1) != '0' // PREVENT Postcode & IC issue
 			) {
 				$value = $v;
-			} elseif (is_callable($v)) {
-				// becareful using this due to it bypass the db escape below.
-				// useful when we want to update the data with mysql function or based on another column data
-				try {
-					$value = $v();
-				} catch (\Throwable $e) {
-					if (function_exists('logSyncError')) {
-						logSyncError(
-							"Closure execution failed in mysql->update for table '$table_name', field '$k': " . $e->getMessage(),
-							$e->getTraceAsString(),
-							[
-								'table' => $table_name,
-								'condition' => $condition,
-								'field' => $k,
-								'value_type' => gettype($v),
-								'record' => $arr,
-							]
-						);
-					}
-					throw $e;
-				}
-			} elseif (is_string($v) && is_callable($v)) {
-				// Catch suspicious callable-like string (eg: "tan") and treat as normal text.
-				$callableLikeStringFields[] = [
-					'field' => $k,
-					'value' => $v,
-				];
-				$value = '"' . $this->escape($v) . '"';
 			} elseif (is_array($v)) {
 				$value = count($v) == 0 ? 'null' : "'" . implode(',', $v) . "'";
 			} elseif ($v == null) {
@@ -211,19 +182,6 @@ class mysql
 				$value = '"' . $this->escape($v) . '"';
 			}
 			$update_arr[] = " `$k` = $value ";
-		}
-
-		if (!empty($callableLikeStringFields) && function_exists('logSyncError')) {
-			logSyncError(
-				"Detected callable-like string value(s) in mysql->update for table '$table_name' (stored as plain text)",
-				null,
-				[
-					'table' => $table_name,
-					'condition' => $condition,
-					'callable_like_fields' => $callableLikeStringFields,
-					'record' => $arr,
-				]
-			);
 		}
 
 		$update = implode(',', $update_arr);
