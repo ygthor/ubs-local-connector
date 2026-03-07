@@ -98,7 +98,7 @@ function getMemoryUsage()
  * @param string $message
  * @param string|null $trace
  */
-function logSyncError($message, $trace = null)
+function logSyncError($message, $trace = null, $recordContext = null, $debugTrace = null)
 {
     $logDir = __DIR__ . '/logs/error';
     if (!is_dir($logDir)) {
@@ -109,6 +109,31 @@ function logSyncError($message, $trace = null)
     $logEntry = "[" . date('Y-m-d H:i:s') . "] ERROR: " . $message . "\n";
     if ($trace) {
         $logEntry .= "TRACE: " . $trace . "\n";
+    }
+    if ($recordContext !== null) {
+        $encodedContext = json_encode($recordContext, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+        if ($encodedContext === false) {
+            $encodedContext = var_export($recordContext, true);
+        }
+        $logEntry .= "RECORD_CONTEXT: " . $encodedContext . "\n";
+    }
+
+    if ($debugTrace === null) {
+        $traceRows = [];
+        $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 20);
+        foreach ($frames as $index => $frame) {
+            $file = $frame['file'] ?? '[internal]';
+            $line = $frame['line'] ?? 0;
+            $function = $frame['function'] ?? 'unknown';
+            $class = $frame['class'] ?? '';
+            $type = $frame['type'] ?? '';
+            $traceRows[] = "#{$index} {$file}:{$line} {$class}{$type}{$function}()";
+        }
+        $debugTrace = implode("\n", $traceRows);
+    }
+
+    if (!empty($debugTrace)) {
+        $logEntry .= "DEBUG_TRACE:\n" . $debugTrace . "\n";
     }
     $logEntry .= str_repeat('-', 80) . "\n";
 
@@ -588,7 +613,15 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
                     $sampleText = implode(', ', $batchSample);
                     $contextMessage = "batchUpsertRemote failed for $remote_table_name batch $batchNo/$totalBatches (sample keys: $sampleText): " . $e->getMessage();
                     ProgressDisplay::error("❌ " . $contextMessage);
-                    logSyncError($contextMessage, $e->getTraceAsString());
+                    $recordContext = [
+                        'table' => $remote_table_name,
+                        'batch_no' => $batchNo,
+                        'total_batches' => $totalBatches,
+                        'batch_size' => count($batch),
+                        'primary_key' => $primary_key,
+                        'sample_records' => array_slice($batch, 0, 3),
+                    ];
+                    logSyncError($contextMessage, $e->getTraceAsString(), $recordContext);
                     throw $e;
                 }
                 
@@ -612,7 +645,12 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
         } catch (\Throwable $e) {
             $message = "batchUpsertRemote fatal for $remote_table_name: " . $e->getMessage();
             ProgressDisplay::error("❌ " . $message);
-            logSyncError($message, $e->getTraceAsString());
+            logSyncError($message, $e->getTraceAsString(), [
+                'table' => $remote_table_name,
+                'total_records' => $totalRecords,
+                'batch_size' => $batchSize,
+                'sample_records' => array_slice($records, 0, 3),
+            ]);
             throw $e;
         } finally {
             if ($db && method_exists($db, 'close')) {
@@ -1033,6 +1071,16 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                             } catch (\Throwable $insertError) {
                                 ProgressDisplay::error("❌ Failed to insert record into $table_name: " . $insertError->getMessage());
                                 ProgressDisplay::error("Record data: " . json_encode($record, JSON_PARTIAL_OUTPUT_ON_ERROR));
+                                logSyncError(
+                                    "Failed to insert record into UBS table $table_name: " . $insertError->getMessage(),
+                                    $insertError->getTraceAsString(),
+                                    [
+                                        'table' => $table_name,
+                                        'source_table' => $table,
+                                        'record' => $record,
+                                        'primary_key' => $keyField,
+                                    ]
+                                );
                                 throw $insertError; // Re-throw to trigger retry logic
                             }
                         }
@@ -1062,6 +1110,16 @@ function batchUpsertUbs($table, $records, $batchSize = 500)
                         if ($retryCount >= $maxRetries) {
                             // ✅ REMOVED REALTIME FALLBACK - Always abort if CLONE fails
                             releaseDbfLock($lockFp);
+                            logSyncError(
+                                "Failed to insert batch in $table_name after $maxRetries retries: " . $e->getMessage(),
+                                $e->getTraceAsString(),
+                                [
+                                    'table' => $table_name,
+                                    'batch_size' => count($batch),
+                                    'sample_records' => array_slice($batch, 0, 3),
+                                    'primary_key' => $keyField,
+                                ]
+                            );
                             throw new Exception("❌ Failed to insert batch in $table_name after $maxRetries retries: " . $e->getMessage());
                         }
                         usleep(100000 * $retryCount); // Exponential backoff
