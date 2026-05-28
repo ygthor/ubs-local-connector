@@ -579,6 +579,51 @@ function batchUpsertRemote($table, $records, $batchSize = 1000)
             unset($record); // Break reference
         }
 
+            // DO orders/items are insert-only on remote — skip if already exists (never update)
+            if ($remote_table_name === 'orders') {
+                $doRefNos = array_values(array_filter(array_map(
+                    fn($r) => strtoupper(trim($r['type'] ?? '')) === 'DO' ? trim($r['reference_no'] ?? '') : null,
+                    $processedRecords
+                )));
+                if (!empty($doRefNos)) {
+                    $esc = implode(',', array_map(fn($r) => "'" . $db->escape($r) . "'", $doRefNos));
+                    $existing = array_flip(array_column(
+                        $db->get("SELECT reference_no FROM orders WHERE reference_no IN ($esc)"),
+                        'reference_no'
+                    ));
+                    $before = count($processedRecords);
+                    $processedRecords = array_values(array_filter($processedRecords, function($r) use ($existing) {
+                        return strtoupper(trim($r['type'] ?? '')) !== 'DO' || !isset($existing[$r['reference_no'] ?? '']);
+                    }));
+                    $skipped = $before - count($processedRecords);
+                    if ($skipped > 0) ProgressDisplay::info("⏭️  Skipped $skipped existing DO order(s) on remote (insert-only, no update)");
+                }
+            }
+            if ($remote_table_name === 'order_items') {
+                $allRefNos = array_unique(array_filter(array_column($processedRecords, 'reference_no')));
+                if (!empty($allRefNos)) {
+                    $esc = implode(',', array_map(fn($r) => "'" . $db->escape($r) . "'", $allRefNos));
+                    $doRefNoSet = array_flip(array_column(
+                        $db->get("SELECT reference_no FROM orders WHERE type = 'DO' AND reference_no IN ($esc)"),
+                        'reference_no'
+                    ));
+                    if (!empty($doRefNoSet)) {
+                        $doEsc = implode(',', array_map(fn($r) => "'" . $db->escape($r) . "'", array_keys($doRefNoSet)));
+                        $existingKeys = [];
+                        foreach ($db->get("SELECT reference_no, item_count FROM order_items WHERE reference_no IN ($doEsc)") as $item) {
+                            $existingKeys[$item['reference_no'] . '|' . $item['item_count']] = true;
+                        }
+                        $before = count($processedRecords);
+                        $processedRecords = array_values(array_filter($processedRecords, function($r) use ($doRefNoSet, $existingKeys) {
+                            $ref = $r['reference_no'] ?? '';
+                            return !isset($doRefNoSet[$ref]) || !isset($existingKeys[$ref . '|' . ($r['item_count'] ?? '')]);
+                        }));
+                        $skipped = $before - count($processedRecords);
+                        if ($skipped > 0) ProgressDisplay::info("⏭️  Skipped $skipped existing DO order item(s) on remote (insert-only, no update)");
+                    }
+                }
+            }
+
             // Ensure primary key is correctly detected before proceeding
             if (empty($primary_key)) {
                 ProgressDisplay::error("❌ No primary key defined for table: $remote_table_name");
