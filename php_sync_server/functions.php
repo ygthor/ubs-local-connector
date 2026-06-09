@@ -2441,6 +2441,13 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
         // Special handling for order_items syncing to ictran
         if ($remote_table_name == 'order_items') {
+            $isFreeGood = $dataRow['is_free_good'] == 1;
+            if ($isFreeGood) {
+                $converted['NOTE1'] = 'FOC';
+                $converted['AMT1_BIL'] = '0';
+                $converted['AMT_BIL'] = '0';
+            }
+
             // Format DATE field - use converted['DATE'] from mapping or fallback
             $converted['DATE'] = extractDate($converted['DATE'] ?? null);
 
