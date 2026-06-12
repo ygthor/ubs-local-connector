@@ -2446,6 +2446,8 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $converted['NOTE1'] = 'FOC';
                 $converted['AMT1_BIL'] = '0';
                 $converted['AMT_BIL'] = '0';
+                $converted['AMT1'] = '0';
+                $converted['AMT'] = '0';
             }
 
             // Format DATE field - use converted['DATE'] from mapping or fallback
