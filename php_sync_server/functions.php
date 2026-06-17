@@ -2441,6 +2441,7 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
         // Special handling for order_items syncing to ictran
         if ($remote_table_name == 'order_items') {
+            unset($converted['IS_FOC']); // no need for updat eUBS
             $isFreeGood = $dataRow['is_free_good'] == 1;
             if ($isFreeGood) {
                 $converted['NOTE1'] = 'FOC';
