@@ -2441,15 +2441,8 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
 
         // Special handling for order_items syncing to ictran
         if ($remote_table_name == 'order_items') {
-            unset($converted['IS_FOC']); // no need for updat eUBS
-            $isFreeGood = $dataRow['is_free_good'] == 1;
-            if ($isFreeGood) {
-                $converted['NOTE1'] = 'FOC';
-                $converted['AMT1_BIL'] = '0';
-                $converted['AMT_BIL'] = '0';
-                $converted['AMT1'] = '0';
-                $converted['AMT'] = '0';
-            }
+            $freeGoodValue = $dataRow['is_free_good'] ?? 0;
+            $isFreeGood = (int)$freeGoodValue === 1;
 
             // Format DATE field - use converted['DATE'] from mapping or fallback
             $converted['DATE'] = extractDate($converted['DATE'] ?? null);
@@ -2792,6 +2785,15 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             // DISAMT_BIL is set from order's discount above (if available), otherwise default to 0
             if (!isset($converted['DISAMT_BIL'])) {
                 $converted['DISAMT_BIL'] = '0';
+            }
+
+            // Keep free-good values forced after all order item defaults/lookups.
+            if ($isFreeGood) {
+                $converted['NOTE1'] = 'FOC';
+                $converted['AMT1_BIL'] = '0';
+                $converted['AMT_BIL'] = '0';
+                $converted['AMT1'] = '0';
+                $converted['AMT'] = '0';
             }
         }
     }
@@ -4270,7 +4272,7 @@ function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate 
                 $artran_remote_data = [];
                 $db_remote_check = new mysql();
                 $db_remote_check->connect_remote();
-                $remoteSql = "SELECT * FROM `$remoteArtranTable` WHERE order_date >= '$minOrderDate' AND order_type != 'DO'";
+                $remoteSql = "SELECT * FROM `$remoteArtranTable` WHERE order_date >= '$minOrderDate' AND type != 'DO'";
                 $artran_remote_data = $db_remote_check->get($remoteSql);
                 $db_remote_check->close();
 
@@ -4387,7 +4389,7 @@ function syncArtranAndIctran($db_local = null, $db_remote = null, $minOrderDate 
                 $db_remote_check->connect_remote();
                 $remoteSql = "SELECT oi.* FROM `$remoteIctranTable` oi 
                              INNER JOIN `$remoteArtranTable` o ON oi.reference_no = o.reference_no 
-                             WHERE o.order_date >= '$minOrderDate' AND o.order_type != 'DO'";
+                             WHERE o.order_date >= '$minOrderDate' AND o.type != 'DO'";
                 $ictran_remote_data = $db_remote_check->get($remoteSql);
                 $db_remote_check->close();
 

@@ -186,7 +186,6 @@ class Converter
                 'TRDATETIME' => 'created_at',
                 'CREATED_ON' => 'created_at',
                 'UPDATED_ON' => 'updated_at',
-                'IS_FOC' => 'is_free_good', // retrieve to update, need unset for SYNC 
 
             ],
 
