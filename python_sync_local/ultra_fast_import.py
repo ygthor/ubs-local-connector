@@ -39,6 +39,19 @@ def ultra_fast_mysql_import(table_name, structures, rows):
         cursor.execute("SET SESSION net_read_timeout = 600")
         cursor.execute("SET SESSION net_write_timeout = 600")
         
+        # Precheck MySQL columns and filter structures if the table already exists
+        cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
+        result = cursor.fetchone()
+        if result and result[0].lower() == table_name.lower():
+            cursor.execute(f"SHOW COLUMNS FROM `{table_name}`")
+            existing_columns = {row[0].lower() for row in cursor.fetchall()}
+            excluded = [struct['name'] for struct in structures if struct['name'].lower() not in existing_columns]
+            if excluded:
+                print(f"⚠️  Excluding columns from sync because they are missing in MySQL: {', '.join(excluded)}")
+            structures = [struct for struct in structures if struct['name'].lower() in existing_columns]
+            if not structures:
+                raise ValueError(f"No matching columns found between DBF and MySQL table '{table_name}'!")
+        
         print(f"🚀 ULTRA-FAST Import: {len(rows):,} records to {table_name}")
         start_time = time.time()
         
@@ -108,7 +121,8 @@ def import_csv_method(table_name, structures, rows, cursor):
         create_table_sql = generate_mysql_create_table(table_name, structures)
         cursor.execute(create_table_sql)
         
-        # Use LOAD DATA INFILE for ultra-fast import
+        # Use LOAD DATA INFILE with explicit columns for ultra-fast import
+        columns = [f"`{struct['name']}`" for struct in structures]
         load_data_sql = f"""
         LOAD DATA INFILE '{csv_filename}'
         INTO TABLE `{table_name}`
@@ -116,6 +130,7 @@ def import_csv_method(table_name, structures, rows, cursor):
         ENCLOSED BY '"'
         LINES TERMINATED BY '\\n'
         IGNORE 0 ROWS
+        ({', '.join(columns)})
         """
         
         cursor.execute(load_data_sql)

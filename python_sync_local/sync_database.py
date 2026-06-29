@@ -111,7 +111,17 @@ def sync_to_mysql(table_name, structures, rows):
                 # Truncate table to remove old data
                 cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
                 result = cursor.fetchone()
-                if result:
+                if result and result[0].lower() == table_name.lower():
+                    # Precheck MySQL columns and filter structures to prevent missing column errors
+                    cursor.execute(f"SHOW COLUMNS FROM `{table_name}`")
+                    existing_columns = {row[0].lower() for row in cursor.fetchall()}
+                    excluded = [struct['name'] for struct in structures if struct['name'].lower() not in existing_columns]
+                    if excluded:
+                        print(f"⚠️  Excluding columns from sync because they are missing in MySQL: {', '.join(excluded)}", flush=True)
+                    structures = [struct for struct in structures if struct['name'].lower() in existing_columns]
+                    if not structures:
+                        raise ValueError(f"No matching columns found between DBF and MySQL table '{table_name}'!")
+                    
                     cursor.execute(f"TRUNCATE TABLE `{table_name}`")
                 
                 # Create table if not exists
