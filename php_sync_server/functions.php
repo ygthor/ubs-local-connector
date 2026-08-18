@@ -188,11 +188,10 @@ function extractDate($dateValue, $fallback = null)
 
 /**
  * Get FPERIOD from order date based on periods table in remote database
- * FPERIOD is calculated by counting months from the earliest period's start_date
- * Example: If earliest period starts 2025-01, then:
- *   - 2025-01 = 1
- *   - 2025-02 = 2
- *   - 2026-01 = 13
+ * FPERIOD is calculated by counting months from the matching period's start_date (1-indexed)
+ * Example: If period starts 2026-07, then:
+ *   - 2026-07 = 1
+ *   - 2026-08 = 2
  *
  * @param string $orderDate The order date in format YYYY-MM-DD or YYYY-MM-DD HH:MM:SS
  * @return int FPERIOD value
@@ -225,37 +224,26 @@ function getFPeriodFromDate($orderDate)
                 LIMIT 1";
         
         $period = $db->first($sql);
-        
-        if ($period && isset($period['start_date']) && isset($period['end_date'])) {
-            // Period found - calculate FPERIOD based on position
-            // Get the earliest period's start_date as the base
-            $baseSQL = "SELECT start_date FROM periods WHERE 1 ORDER BY start_date ASC LIMIT 1";
-            $basePeriod = $db->first($baseSQL);
-            $db->close();
-            
-            if ($basePeriod && isset($basePeriod['start_date'])) {
-                $baseDate = $basePeriod['start_date'];
-                $baseTimestamp = strtotime($baseDate);
-                $baseYear = (int)date('Y', $baseTimestamp);
-                $baseMonth = (int)date('m', $baseTimestamp);
-                
-                // Calculate FPERIOD: months from base period to order month
-                // FPERIOD = (orderYear - baseYear) * 12 + (orderMonth - baseMonth) + 1
-                $fperiod = ($orderYear - $baseYear) * 12 + ($orderMonth - $baseMonth) + 1;
-                return $fperiod;
-            }
-        }
-        
         $db->close();
         
-        // Fallback: If no matching period found, calculate based on year/month
-        // Assume 2025-01 is the base (1 = 2025-01, 2 = 2025-02, 13 = 2026-01, etc.)
-        return ($orderYear - 2025) * 12 + $orderMonth;
+        if ($period && isset($period['start_date']) && isset($period['end_date'])) {
+            // Period found - calculate FPERIOD relative to this period's start_date
+            $baseDate = $period['start_date'];
+            $baseTimestamp = strtotime($baseDate);
+            $baseYear = (int)date('Y', $baseTimestamp);
+            $baseMonth = (int)date('m', $baseTimestamp);
+            
+            // Calculate FPERIOD: months from matched period's start month to order month
+            // FPERIOD = (orderYear - baseYear) * 12 + (orderMonth - baseMonth) + 1
+            $fperiod = ($orderYear - $baseYear) * 12 + ($orderMonth - $baseMonth) + 1;
+            return $fperiod;
+        }
+        
+        // Fallback: If no matching period found, fallback to order's calendar month (1-12)
+        return $orderMonth;
     } catch (Exception $e) {
-        // If any error occurs, fallback to current month calculation
-        $year = date('Y');
-        $month = date('m');
-        return ($year - 2025) * 12 + $month;
+        // If any error occurs, fallback to current calendar month
+        return (int)date('m');
     }
 }
 
