@@ -2298,6 +2298,23 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             if ($qty !== null && $qty !== '') {
                 $converted['quantity'] = $qty;
             }
+
+            // If product_name is empty from ictran DESP, lookup from local icitem master table
+            if (empty($converted['product_name']) && !empty($dataRow['ITEMNO'])) {
+                $db = new mysql;
+                $db->connect();
+                $itemNo = $db->escape($dataRow['ITEMNO']);
+                $itemData = $db->first("SELECT DESP FROM ubs_ubsstk2015_icitem WHERE ITEMNO='$itemNo'");
+                $db->close();
+                if ($itemData && !empty($itemData['DESP'])) {
+                    $converted['product_name'] = $itemData['DESP'];
+                }
+            }
+
+            // Mirror product_name into description for schema consistency
+            if (!empty($converted['product_name'])) {
+                $converted['description'] = $converted['product_name'];
+            }
         }
 
         // Special handling for orders: Combine UBS DATE with CREATED_ON's time

@@ -12,6 +12,10 @@ include(__DIR__ . '/bootstrap/cache.php');
 // Set to 0 to disable (use normal sync with timestamp comparison)
 // Example: 7 = sync customers updated in the last 7 days as full sync
 $CUSTOMER_FULL_SYNC_DAYS = 7; // Adjust this value for testing
+
+// Force-update dates: records with these order_date(s) will be re-synced Remote→UBS even if they already exist in UBS
+// Comment out the line below (set to []) when done
+$FORCE_UPDATE_DATES = []; // e.g. ['2026-08-17', '2026-08-18'] or []
 // ============================================================================
 
 // Initialize sync environment and progress display
@@ -497,6 +501,14 @@ try {
                         ORDER BY UPDATED_ON ASC
                         LIMIT $chunkSize OFFSET $offset
                     ";
+                } elseif ($resync_mode && $resync_date) {
+                    // Resync mode: Fetch records matching specific date
+                    $sql = "
+                        SELECT * FROM `$ubs_table` 
+                        WHERE (DATE(CREATED_ON) = '$resync_date' OR DATE(UPDATED_ON) = '$resync_date')
+                        ORDER BY UPDATED_ON ASC
+                        LIMIT $chunkSize OFFSET $offset
+                    ";
                 } else {
                     // Normal sync: Only records updated after last sync
                     $sql = "
@@ -731,11 +743,14 @@ try {
                         unset($allUbsKeysData);
                         
                         // Find missing records (in remote but not in UBS)
+                        // Also include existing records if their order_date matches $FORCE_UPDATE_DATES
                         $remote_key = Converter::primaryKey($remote_table_name);
                         $missing_records = [];
                         foreach ($allRemoteData as $remote_row) {
                             $remoteKey = $remote_row[$remote_key] ?? '';
-                            if (!empty($remoteKey) && !isset($allUbsKeys[$remoteKey])) {
+                            $rowOrderDate = isset($remote_row['order_date']) ? substr($remote_row['order_date'], 0, 10) : null;
+                            $isForceUpdateDate = !empty($FORCE_UPDATE_DATES) && in_array($rowOrderDate, $FORCE_UPDATE_DATES);
+                            if (!empty($remoteKey) && (!isset($allUbsKeys[$remoteKey]) || $isForceUpdateDate)) {
                                 $missing_records[] = $remote_row;
                             }
                         }

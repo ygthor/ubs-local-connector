@@ -170,7 +170,7 @@ class Converter
                 'REFNO'       => 'reference_no', 
                 'ITEMCOUNT' => 'item_count',
                 'ITEMNO' => 'product_no',
-                'DESP' => 'description',
+                'DESP' => 'product_name',
                 'QTY_BIL' => 'quantity',
                 'PRICE_BIL' => 'unit_price',
                 'UNIT_BIL' => 'unit',
