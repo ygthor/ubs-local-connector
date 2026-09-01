@@ -1605,8 +1605,8 @@ function recalculateArtranTotals($refNos)
                     $row->set('GRAND', $totals['grand']);
                     
                     // ✅ Special handling for CN (Credit Note) type
-                    if ($orderType === 'CN') {
-                        // For CN: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
+                    if ($orderType === 'CN' || $orderType === 'CN2') {
+                        // For CN / CN2: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
                         $row->set('CREDITAMT', $totals['debitamt']);
                         $row->set('DEBITAMT', 0);
                     } else {
@@ -1619,7 +1619,7 @@ function recalculateArtranTotals($refNos)
                     $artranEditor->writeRecord();
                     $updatedCount++;
 
-                    $typeInfo = $orderType === 'CN' ? " (CN: CREDITAMT={$totals['debitamt']}, DEBITAMT=0)" : "";
+                    $typeInfo = ($orderType === 'CN' || $orderType === 'CN2') ? " (CN: CREDITAMT={$totals['debitamt']}, DEBITAMT=0)" : "";
                     ProgressDisplay::info("📝 Updated artran DBF record for REFNO: $refNoOriginal (GROSS_BIL: {$totals['grossBil']}, GRAND_BIL: {$totals['grandBil']}, Items: {$totals['itemCount']})$typeInfo");
                 } catch (\Throwable $e) {
                     ProgressDisplay::error("❌ Error setting artran fields for REFNO $refNoOriginal: " . $e->getMessage());
@@ -1671,8 +1671,8 @@ function recalculateArtranTotals($refNos)
                         ];
                         
                         // ✅ Special handling for CN (Credit Note) type
-                        if ($orderType === 'CN') {
-                            // For CN: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
+                        if ($orderType === 'CN' || $orderType === 'CN2') {
+                            // For CN / CN2: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
                             $updateData['CREDITAMT'] = $totals['debitamt'];
                             $updateData['DEBITAMT'] = 0;
                         } else {
@@ -2335,6 +2335,12 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $converted['order_date'] = $datePart . ' ' . $timePart; // Result: '2025-12-12 11:11:11'
             }
             // If parsing fails, use UBS DATE as is (will default to 00:00:00)
+
+            // ✅ Preserve CN2 type on remote if reference_no starts with CN2
+            $refNo = $converted['reference_no'] ?? $dataRow['REFNO'] ?? '';
+            if (!empty($refNo) && strpos(strtoupper(trim($refNo)), 'CN2') === 0) {
+                $converted['type'] = 'CN2';
+            }
         }
 
         // ✅ Special handling for order_items: Fetch TYPE, DATE, AGENNO from parent orders table
@@ -2419,13 +2425,15 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
             }
         }
 
-        // ✅ Special handling for orders syncing to artran (CN type)
+        // ✅ Special handling for orders syncing to artran (CN/CN2 type)
         if ($remote_table_name == 'orders') {
             // Get order type from dataRow
             $orderType = strtoupper(trim($converted['TYPE'] ?? $dataRow['type'] ?? ''));
             
-            if ($orderType === 'CN') {
-                // For CN: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
+            if ($orderType === 'CN' || $orderType === 'CN2') {
+                // Always sync CN and CN2 to UBS as standard TYPE = 'CN'
+                $converted['TYPE'] = 'CN';
+                // For CN / CN2: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
                 // Get the amount from grand_amount or GRAND_BIL
                 $amount = $dataRow['grand_amount'] ?? $converted['GRAND_BIL'] ?? $converted['GRAND'] ?? 0;
                 $converted['CREDITAMT'] = $amount;
@@ -2436,8 +2444,6 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                 $converted['DEBITAMT'] = $amount;
                 $converted['CREDITAMT'] = 0;
             }
-
-            
 
             // Handle DATE field - use dataRow['order_date'] as source of truth
             $converted['DATE'] = extractDate($dataRow['order_date'] ?? null);
@@ -2650,10 +2656,12 @@ function convert($remote_table_name, $dataRow, $direction = 'to_remote')
                         $converted['TYPE'] = $orderData['type'];
                     }
                     
-                    // ✅ Special handling for CN (Credit Note) type when syncing from remote to UBS
+                    // ✅ Special handling for CN / CN2 type when syncing from remote to UBS
                     $orderType = strtoupper(trim($converted['TYPE'] ?? $orderData['type'] ?? ''));
-                    if ($orderType === 'CN') {
-                        // For CN: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
+                    if ($orderType === 'CN' || $orderType === 'CN2') {
+                        // Always sync CN and CN2 items to UBS as standard TYPE = 'CN'
+                        $converted['TYPE'] = 'CN';
+                        // For CN / CN2: Move DEBITAMT value to CREDITAMT, set DEBITAMT to 0
                         // Get the amount from grand_amount or net_amount
                         $amount = $orderData['grand_amount'] ?? $orderData['net_amount'] ?? $converted['GRAND_BIL'] ?? $converted['GRAND'] ?? 0;
                         $converted['CREDITAMT'] = $amount;
