@@ -19,6 +19,36 @@ include(__DIR__ . '/bootstrap/cache.php');
 // Initialize sync environment
 initializeSyncEnvironment();
 
+/**
+ * Safely get field from XBase row using columnMap
+ */
+function getFieldSafe($row, $fieldName, $default = null, $columnMap = null) {
+    if ($columnMap !== null && !isset($columnMap[strtolower($fieldName)])) {
+        return $default;
+    }
+    try {
+        $val = $row->get($fieldName);
+        return $val !== null ? $val : $default;
+    } catch (\Throwable $e) {
+        return $default;
+    }
+}
+
+/**
+ * Safely set field on XBase row using columnMap
+ */
+function setFieldSafe($row, $fieldName, $value, $columnMap = null) {
+    if ($columnMap !== null && !isset($columnMap[strtolower($fieldName)])) {
+        return false;
+    }
+    try {
+        $row->set($fieldName, $value);
+        return true;
+    } catch (\Throwable $e) {
+        return false;
+    }
+}
+
 // Parse command line arguments
 $isDryRun = false;
 $isForce = false;
@@ -120,10 +150,16 @@ try {
         'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE
     ]);
 
+    $columns = $editor->getColumns();
+    $columnMap = [];
+    foreach ($columns as $column) {
+        $columnMap[strtolower($column->getName())] = $column;
+    }
+
     while ($row = $editor->nextRecord()) {
-        $type = strtoupper(trim($row->get('TYPE') ?? ''));
-        $refNo = trim($row->get('REFNO') ?? '');
-        $rawDate = trim($row->get('DATE') ?? '');
+        $type = strtoupper(trim(getFieldSafe($row, 'TYPE', '', $columnMap)));
+        $refNo = trim(getFieldSafe($row, 'REFNO', '', $columnMap));
+        $rawDate = trim(getFieldSafe($row, 'DATE', '', $columnMap));
         
         // Parse row date (can be YYYYMMDD or YYYY-MM-DD or DateTime)
         $rowDateYmd = '';
@@ -146,10 +182,10 @@ try {
 
             if ($isEligibleDate) {
                 $convertedArtranRefs[] = $refNo;
-                $grossBil = (float)($row->get('GROSS_BIL') ?? 0);
-                $grandBil = (float)($row->get('GRAND_BIL') ?? $row->get('GRAND') ?? 0);
-                $debitAmt = (float)($row->get('DEBITAMT') ?? 0);
-                $creditAmt = (float)($row->get('CREDITAMT') ?? 0);
+                $grossBil = (float)(getFieldSafe($row, 'GROSS_BIL', 0, $columnMap));
+                $grandBil = (float)(getFieldSafe($row, 'GRAND_BIL', getFieldSafe($row, 'GRAND', 0, $columnMap), $columnMap));
+                $debitAmt = (float)(getFieldSafe($row, 'DEBITAMT', 0, $columnMap));
+                $creditAmt = (float)(getFieldSafe($row, 'CREDITAMT', 0, $columnMap));
 
                 // For Credit Note: Amount should be in CREDITAMT, DEBITAMT should be 0
                 $targetCreditAmt = $creditAmt > 0 ? $creditAmt : ($debitAmt > 0 ? $debitAmt : $grandBil);
@@ -163,10 +199,10 @@ try {
                 );
 
                 if (!$isDryRun) {
-                    $row->set('TYPE', 'CN');
-                    $row->set('CREDITAMT', $targetCreditAmt);
-                    $row->set('DEBITAMT', 0);
-                    $row->set('UPDATED_ON', date('Y-m-d H:i:s'));
+                    setFieldSafe($row, 'TYPE', 'CN', $columnMap);
+                    setFieldSafe($row, 'CREDITAMT', $targetCreditAmt, $columnMap);
+                    setFieldSafe($row, 'DEBITAMT', 0, $columnMap);
+                    setFieldSafe($row, 'UPDATED_ON', date('Y-m-d H:i:s'), $columnMap);
                     $editor->writeRecord();
                 }
 
@@ -226,12 +262,18 @@ try {
         'editMode' => \XBase\TableEditor::EDIT_MODE_CLONE
     ]);
 
+    $icColumns = $editor->getColumns();
+    $icColumnMap = [];
+    foreach ($icColumns as $column) {
+        $icColumnMap[strtolower($column->getName())] = $column;
+    }
+
     while ($row = $editor->nextRecord()) {
-        $type = strtoupper(trim($row->get('TYPE') ?? ''));
-        $refNo = trim($row->get('REFNO') ?? '');
-        $itemCount = trim($row->get('ITEMCOUNT') ?? $row->get('TRANCODE') ?? '');
-        $itemNo = trim($row->get('ITEMNO') ?? '');
-        $rawDate = trim($row->get('DATE') ?? '');
+        $type = strtoupper(trim(getFieldSafe($row, 'TYPE', '', $icColumnMap)));
+        $refNo = trim(getFieldSafe($row, 'REFNO', '', $icColumnMap));
+        $itemCount = trim(getFieldSafe($row, 'ITEMCOUNT', getFieldSafe($row, 'TRANCODE', '', $icColumnMap), $icColumnMap));
+        $itemNo = trim(getFieldSafe($row, 'ITEMNO', '', $icColumnMap));
+        $rawDate = trim(getFieldSafe($row, 'DATE', '', $icColumnMap));
 
         $rowDateYmd = '';
         if (!empty($rawDate)) {
@@ -253,11 +295,6 @@ try {
             $isEligibleDate = empty($rowDateYmd) || ($rowDateYmd >= $cutoffDateYmd);
 
             if ($isEligibleDate) {
-                $debitAmt = (float)($row->get('DEBITAMT') ?? 0);
-                $creditAmt = (float)($row->get('CREDITAMT') ?? 0);
-                $amtBil = (float)($row->get('AMT_BIL') ?? $row->get('AMT') ?? 0);
-                $targetCreditAmt = $creditAmt > 0 ? $creditAmt : ($debitAmt > 0 ? $debitAmt : $amtBil);
-
                 echo sprintf(
                     "  -> Found ictran: REFNO: %-10s | Item: %-8s | Prod: %-10s | TYPE: %-4s -> CN\n",
                     $refNo,
@@ -267,10 +304,8 @@ try {
                 );
 
                 if (!$isDryRun) {
-                    $row->set('TYPE', 'CN');
-                    $row->set('CREDITAMT', $targetCreditAmt);
-                    $row->set('DEBITAMT', 0);
-                    $row->set('UPDATED_ON', date('Y-m-d H:i:s'));
+                    setFieldSafe($row, 'TYPE', 'CN', $icColumnMap);
+                    setFieldSafe($row, 'UPDATED_ON', date('Y-m-d H:i:s'), $icColumnMap);
                     $editor->writeRecord();
                 }
 
@@ -343,8 +378,6 @@ try {
         if ($mysqlIctranFound > 0) {
             $updateIctranSql = "UPDATE `ubs_ubsstk2015_ictran` 
                                SET `TYPE` = 'CN',
-                                   `CREDITAMT` = CASE WHEN (`CREDITAMT` = 0 OR `CREDITAMT` IS NULL) AND `DEBITAMT` > 0 THEN `DEBITAMT` ELSE `CREDITAMT` END,
-                                   `DEBITAMT` = 0,
                                    `UPDATED_ON` = NOW()
                                WHERE (`DATE` >= '$cutoffDateYmd' OR `CREATED_ON` >= '$cutoffDateYmd' OR `REFNO` LIKE 'CN2%') 
                                  AND (`TYPE` = 'CN2' OR `REFNO` LIKE 'CN2%')";
